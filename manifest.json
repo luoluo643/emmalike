@@ -1,0 +1,12 @@
+{
+    "display_name": "轻酒馆 Tavern Lite",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "luoluo643",
+    "version": "0.13.0",
+    "homePage": "https://github.com/luoluo643/emmalike",
+    "auto_update": true
+}

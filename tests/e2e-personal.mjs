@@ -1,0 +1,224 @@
+import { createRequire } from 'node:module';
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import { trackFixtureWrites } from './regression-fixtures.mjs';
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_CORE ?? 'playwright-core');
+const [base = 'http://127.0.0.1:8031', mode = 'device'] = process.argv.slice(2);
+assert.equal(base, 'http://127.0.0.1:8031', 'This regression writes fixtures only to isolated 8031');
+const output = process.env.TEST_OUTPUT || `/tmp/tavern-improvements/personal-${mode}`;
+await fs.mkdir(output, { recursive: true });
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
+const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+await trackFixtureWrites(context, output);
+const page = await context.newPage(); page.setDefaultTimeout(25000);
+const errors = [], results = []; let generationRequests = 0;
+page.on('pageerror', e => errors.push(e.message));
+page.on('request', r => { if (/\/api\/backends\/chat-completions\/generate/.test(r.url())) generationRequests++; });
+const check = (name, ok) => { assert.ok(ok, name); results.push(name); console.log('PASS', name); };
+const gate = () => { let release; const promise = new Promise(r => { release = r; }); return { release, promise }; };
+let token = (await (await context.request.get(base + '/csrf-token')).json()).token;
+const post = (path, data) => context.request.post(base + path, { headers: { 'X-CSRF-Token': token }, data });
+const login = async handle => { await post('/api/users/login', { handle, password: handle === 'default-user' ? 'test1234' : 'test-b-password' }); token = (await (await context.request.get(base + '/csrf-token')).json()).token; };
+await login('default-user');
+const bUser = `private-b-${Date.now().toString(36)}`;
+assert.ok((await post('/api/users/create', { handle: bUser, name: '隐私测试B', password: 'test-b-password', admin: false })).ok(), 'Unique B fixture account creation must succeed');
+const app = base + '/scripts/extensions/third-party/emmalike/app/';
+// Account-switch checks require a new document; hash-only goto can be rejected by the old frozen bridge.
+const navigate = async target => { await page.goto('about:blank'); return page.goto(target); };
+const avatar = 'default_Seraphina.png', file = 'personal-' + Date.now();
+let createdGroup;
+await fs.writeFile(output + '/fixtures.json', JSON.stringify({ bUser, avatar, file }));
+const url = app + '#' + new URLSearchParams({ chat: avatar, file });
+const quote = '这句别丢，雨停以后我们还在这里。';
+const note = 'PRIVATE_NOTE_NEVER_IN_PROMPT_' + Date.now();
+const versionA = Array.from({ length: 35 }, (_, i) => `${quote} 快照A段落${i}。`).join('\n\n');
+const versionB = Array.from({ length: 36 }, (_, i) => `另一版的晚风。当前B段落${i}。`).join('\n\n');
+const chat = [{ user_name: 'User', character_name: 'Seraphina', chat_metadata: { variables: { keep: 'unchanged' } } }];
+for (let i = 0; i < 60; i++) chat.push({ name: i % 2 ? 'User' : 'Seraphina', is_user: !!(i % 2), is_system: false,
+    send_date: new Date().toISOString(), extra: { testVariable: i, regressionFixture: file }, mes: `测试历史消息${i}。`.repeat(8) });
+chat[13] = { ...chat[13], mes: versionA, swipes: [versionA, versionB], swipe_id: 0 };
+const saveChat = () => post('/api/chats/save', { ch_name: 'Seraphina', file_name: file, chat, avatar_url: avatar });
+const readChat = async () => (await post('/api/chats/get', { ch_name: 'Seraphina', file_name: file, avatar_url: avatar })).json();
+await saveChat();
+const native = (fn, arg) => page.evaluate(([code, a]) => {
+    const w = document.querySelector('iframe.engine').contentWindow;
+    return new w.Function('w', 'a', `return (${code})(w,a)`)(w, a);
+}, [fn.toString(), arg]);
+const synced = () => page.locator('.tl-composer-input[data-synced="true"]').waitFor({ timeout: 240000 });
+const openRecords = async () => { await page.getByRole('button', { name: '更多', exact: true }).click(); await page.getByRole('button', { name: /^我的摘录/ }).click(); await page.getByRole('dialog', { name: '我的摘录' }).waitFor(); };
+const close = async () => { await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click(); };
+const records = () => page.locator('.tl-personal-record[data-record-id]');
+const loadOld = async () => { while (!await page.locator('.tl-message[data-index="12"]').count()) await page.getByRole('button', { name: /查看更早/ }).click(); };
+let quoteId, markId;
+try {
+    const health = await post('/api/plugins/tavern-lite/health', { account: 'default-user' });
+    check('保存能力来自实际接口', mode === 'account' ? health.ok() && (await health.json()).personalRecords === true : health.status() === 404 || health.ok() && !(await health.json()).personalRecords);
+    await navigate(url); await synced(); await loadOld();
+    await page.locator('.tl-message[data-index="12"] .tl-message-menu').click();
+    await page.getByRole('button', { name: /^收藏原句/ }).click();
+    await page.locator('.tl-select-text').evaluate((el, text) => {
+        const range = document.createRange(); range.setStart(el.firstChild, 0); range.setEnd(el.firstChild, text.length);
+        const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    }, quote);
+    await page.waitForTimeout(100);
+    if (mode === 'account') await page.route('**/api/plugins/tavern-lite/records/write', r => r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"模拟暂时失败"}' }));
+    else await page.evaluate(() => {
+        const original = IDBObjectStore.prototype.put;
+        // Only the excerpt store fails, once: other stores (reading looks, kept chat saves) may write meanwhile.
+        IDBObjectStore.prototype.put = function (...args) {
+            if (this.transaction?.db?.name !== 'tavern-lite-personal') return original.apply(this, args);
+            IDBObjectStore.prototype.put = original; throw new DOMException('quota', 'QuotaExceededError');
+        };
+    });
+    await page.getByRole('button', { name: '收藏所选原句', exact: true }).click();
+    await page.getByRole('button', { name: '重试保存', exact: true }).waitFor();
+    check('保存失败保留冻结的原文，不假报成功', await page.getByRole('dialog', { name: '收藏原句' }).isVisible() && !(await page.locator('.tl-personal-notice').count()));
+    if (mode === 'account') await page.unroute('**/api/plugins/tavern-lite/records/write');
+    await page.getByRole('button', { name: '重试保存', exact: true }).dblclick();
+    await page.locator('.tl-personal-notice').waitFor();
+    check('保存范围文案准确', (await page.locator('.tl-personal-notice').innerText()).includes(mode === 'account' ? '已保存到账号' : '仅本机'));
+    await page.getByRole('button', { name: '加备注', exact: true }).click();
+    await page.getByLabel('只给自己看的备注').fill(note);
+    await page.getByRole('button', { name: '保存备注', exact: true }).click();
+    await records().first().waitFor();
+    await page.waitForFunction(text => document.querySelector('.tl-personal-record[data-record-id]')?.textContent.includes(text), note);
+    check('连点与重试只保存一条原句', await records().count() === 1);
+    quoteId = await records().first().getAttribute('data-record-id');
+    check('选中的原句与私人备注一致', (await records().first().innerText()).includes(note) && (await records().first().locator('.tl-personal-text').innerText()) === quote);
+    await records().first().getByRole('button', { name: '回到出处', exact: true }).click();
+    await page.locator('.tl-source-highlight[data-index="12"]').waitFor();
+    check('严格核验后加载历史并高亮正确消息', true);
+    await page.locator('.tl-message[data-index="12"] .tl-message-menu').click();
+    await page.getByRole('button', { name: /^先留这一版/ }).click();
+    await page.getByRole('button', { name: '保存这版快照', exact: true }).click();
+    await page.locator('.tl-personal-notice').filter({ hasText: '已存下这一版' }).waitFor();
+    // Fixture changes the adopted candidate explicitly; the comparison feature must never do so.
+    chat[13].mes = versionB; chat[13].swipe_id = 1; await saveChat();
+    await page.reload(); await synced(); await page.waitForTimeout(1000);
+    await page.locator('.tl-composer-input').fill('比较期间保留的草稿');
+    const beforeServer = await readChat(), beforeMemory = await native(w => JSON.stringify(w.SillyTavern.getContext().chat));
+    const beforeGenerations = generationRequests;
+    await openRecords(); await records().filter({ hasText: '留下的版本' }).waitFor();
+    const marked = records().filter({ hasText: '留下的版本' }); markId = await marked.getAttribute('data-record-id');
+    check('刷新后原句、备注和版本快照仍在', await records().count() === 2 && (await page.getByRole('dialog', { name: '我的摘录' }).innerText()).includes(note));
+    await marked.getByRole('button', { name: '与当前版比较', exact: true }).click();
+    await page.getByRole('dialog', { name: '比较' }).waitFor();
+    check('比较历史版本时两份长文正确', await page.getByLabel('快照正文').innerText() === versionA && await page.getByLabel('当前版正文').innerText() === versionB);
+    await page.getByLabel('快照正文').evaluate(el => { el.scrollTop = 350; el.dispatchEvent(new Event('scroll')); });
+    await page.getByRole('tab', { name: '当前版', exact: true }).click();
+    await page.getByLabel('当前版正文').evaluate(el => { el.scrollTop = 500; el.dispatchEvent(new Event('scroll')); });
+    await page.getByRole('tab', { name: '留下的版', exact: true }).click();
+    check('手机两版分别保持滚动位置', await page.getByLabel('快照正文').evaluate(el => Math.abs(el.scrollTop - 350) < 3));
+    await page.screenshot({ path: output + '/compare-mobile.png' });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.screenshot({ path: output + '/compare-desktop.png' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.keyboard.press('Escape'); await page.getByRole('dialog', { name: '我的摘录' }).waitFor(); await close();
+    check('比较未改变正式候选、正文、后文或变量', await native(w => JSON.stringify(w.SillyTavern.getContext().chat)) === beforeMemory && JSON.stringify(await readChat()) === JSON.stringify(beforeServer));
+    check('比较保留输入草稿且不触发生成', await page.locator('.tl-composer-input').inputValue() === '比较期间保留的草稿' && generationRequests === beforeGenerations);
+    // Private notes stay out of an actual mock-model request.
+    await page.locator('.tl-composer-input').fill('检查私人备注隔离'); await page.getByRole('button', { name: '发送', exact: true }).click();
+    await page.locator('.tl-message[data-role="char"]').filter({ hasText: '收到：检查私人备注隔离' }).waitFor({ timeout: 120000 });
+    await page.waitForFunction(() => !document.querySelector('iframe.engine').contentWindow.TavernLiteBridge.isGenerating());
+    const modelRequest = await (await fetch((process.env.MOCK_URL || 'http://127.0.0.1:5001') + '/last')).json();
+    check('真实模拟模型请求不含私人备注', !JSON.stringify(modelRequest).includes(note));
+    await openRecords();
+    const quoted = page.locator(`[data-record-id="${quoteId}"]`);
+    await quoted.getByRole('button', { name: '删除记录', exact: true }).click();
+    await page.getByRole('button', { name: '撤销删除', exact: true }).waitFor();
+    await page.getByRole('button', { name: '撤销删除', exact: true }).click();
+    await quoted.waitFor(); check('删除后可按记录撤销，备注与其他记录不变', (await quoted.innerText()).includes(note) && await records().count() === 2);
+    await close();
+    // Authenticated server records are available in a second browser; device records are not.
+    const second = await browser.newContext();
+    const secondToken = (await (await second.request.get(base + '/csrf-token')).json()).token;
+    await second.request.post(base + '/api/users/login', { headers: { 'X-CSRF-Token': secondToken }, data: { handle: 'default-user', password: 'test1234' } });
+    const other = await second.newPage(); await other.goto(app + '#me');
+    await other.getByRole('button', { name: /^我的摘录/ }).click();
+    if (mode === 'account') { await other.locator(`[data-record-id="${quoteId}"]`).waitFor(); check('账号记录可在全新浏览器读取', (await other.locator(`[data-record-id="${quoteId}"]`).innerText()).includes(note)); }
+    else { await other.getByText(/还没有摘录/).waitFor(); check('仅本机记录没有假装跨浏览器同步', await other.locator('[data-record-id]').count() === 0); }
+    await second.close();
+    // Same site, same browser A → B → A. Also hold a read across the account switch.
+    const readGate = gate(); let entered = false;
+    const heldPath = mode === 'account' ? '**/api/plugins/tavern-lite/records/list' : '**/api/users/me';
+    await page.route(heldPath, async r => { const response = await r.fetch(); entered = true; await readGate.promise; await r.fulfill({ response }); });
+    await openRecords(); while (!entered) await page.waitForTimeout(30);
+    await login(bUser); readGate.release();
+    await page.waitForTimeout(500); await page.unroute(heldPath);
+    check('切账号后拒收旧账号的异步读取结果', !(await page.locator('body').innerText()).includes(note));
+    await navigate(app + '#me'); await page.reload();
+    await page.getByRole('button', { name: /^我的摘录/ }).click(); await page.getByText(/还没有摘录/).waitFor();
+    check('同浏览器B看不到A的摘录', await records().count() === 0);
+    if (mode === 'account') {
+        const forged = await post('/api/plugins/tavern-lite/records/list', { account: 'default-user' });
+        check('篡改账号名无法读取别人的记录', forged.status() === 403);
+        const forgedWrite = await post('/api/plugins/tavern-lite/records/write', { account: bUser, id: quoteId, expected: 1, operationId: crypto.randomUUID(), action: 'note', note: 'attack' });
+        check('篡改记录ID不能修改另一个账号', [404, 409].includes(forgedWrite.status()));
+    }
+    await login('default-user'); await navigate(url); await page.reload(); await synced(); await openRecords();
+    await quoted.waitFor(); check('切回A原记录与备注仍在', (await quoted.innerText()).includes(note));
+    await close();
+    await page.locator('.tl-composer-input').fill('A_ONLY_DRAFT_' + note);
+    await page.locator('.tl-message').last().locator('.tl-message-menu').click();
+    await page.getByRole('button', { name: /^收藏原句/ }).click();
+    const saveGate = gate(); let saveEntered = false;
+    const savePath = mode === 'account' ? '**/api/plugins/tavern-lite/records/write' : '**/api/users/me';
+    await page.route(savePath, async r => { const response = await r.fetch(); saveEntered = true; await saveGate.promise; await r.fulfill({ response }); });
+    await page.getByRole('button', { name: '收藏整段', exact: true }).click();
+    while (!saveEntered) await page.waitForTimeout(30);
+    await login(bUser); saveGate.release(); await page.waitForTimeout(500); await page.unroute(savePath);
+    check('切账号后迟到的保存结果不会显示给B', !(await page.locator('body').innerText()).includes('已收藏'));
+    await navigate(url); await page.reload(); await page.locator('.tl-composer-input').waitFor();
+    check('同浏览器B没有A的输入草稿', !(await page.locator('.tl-composer-input').inputValue()).includes('A_ONLY_DRAFT'));
+    const freshB = await browser.newContext();
+    const freshToken = (await (await freshB.request.get(base + '/csrf-token')).json()).token;
+    await freshB.request.post(base + '/api/users/login', { headers: { 'X-CSRF-Token': freshToken }, data: { handle: bUser, password: 'test-b-password' } });
+    const freshPage = await freshB.newPage(); await freshPage.goto(app + '#me');
+    await freshPage.getByRole('button', { name: /^我的摘录/ }).click(); await freshPage.getByText(/还没有摘录/).waitFor();
+    check('全新浏览器中B也没有A的个人记录', await freshPage.locator('[data-record-id]').count() === 0); await freshB.close();
+    await login('default-user'); await navigate(url); await page.reload(); await synced();
+    check('切回A后其输入草稿仍保留', (await page.locator('.tl-composer-input').inputValue()).includes('A_ONLY_DRAFT'));
+    // Removing the source story must not remove either private snapshot.
+    await native((w, a) => w.TavernLiteBridge.deleteChapter(a.avatar, a.file), { avatar, file });
+    await navigate(app + '#me'); await page.reload(); await page.getByRole('button', { name: /^我的摘录/ }).click();
+    await quoted.waitFor(); await page.waitForFunction(id => document.querySelector(`[data-record-id="${id}"]`)?.textContent.includes('原文已改动或无法定位'), quoteId);
+    check('源故事删除后快照和备注仍完整可读并标示失效', (await quoted.innerText()).includes(note) && await page.locator(`[data-record-id="${markId}"]`).count() === 1);
+    await page.screenshot({ path: output + '/records-source-deleted.png' });
+    await close();
+    const group = await (await post('/api/groups/create', { name: '摘录群聊' + Date.now(), members: [avatar], avatar_url: 'img/ai4.png' })).json();
+    createdGroup = group; await fs.writeFile(output + '/fixtures.json', JSON.stringify({ bUser, avatar, file, group: { id: group.id, chat_id: group.chat_id, chats: group.chats } }));
+    await page.reload();
+    await page.waitForFunction(() => !!document.querySelector('iframe.engine')?.contentWindow?.TavernLiteBridge, null, { timeout: 240000 });
+    await native((w, id) => w.TavernLiteBridge.openGroup(id), group.id);
+    await page.getByRole('button', { name: /^我的摘录/ }).click();
+    await page.getByRole('button', { name: /^从当前对话选取/ }).click();
+    await page.getByRole('dialog', { name: '从当前对话选取' }).getByRole('button', { name: '收藏原句', exact: true }).first().click();
+    await page.getByRole('button', { name: '收藏整段', exact: true }).click();
+    const ownedGroupRecord = records().filter({ hasText: String(group.chat_id) });
+    await ownedGroupRecord.first().waitFor();
+    check('群聊原文可独立收藏且与单人故事来源区分', true);
+    const groupRecord = ownedGroupRecord.first(), groupRecordId = await groupRecord.getAttribute('data-record-id');
+    await page.locator('.tl-personal-notice').getByRole('button', { name: '加备注', exact: true }).click();
+    await page.locator('#tl-private-note').fill('群聊备注验收');
+    await page.getByRole('button', { name: '保存备注', exact: true }).click();
+    await page.locator(`[data-record-id="${groupRecordId}"]`).getByText('备注：群聊备注验收').waitFor();
+    await page.locator('.tl-personal-notice').getByRole('button', { name: '撤销', exact: true }).click();
+    await page.getByRole('button', { name: '撤销删除', exact: true }).waitFor();
+    await page.locator(`[data-record-id="${groupRecordId}"]`).waitFor({ state: 'detached' });
+    check('群聊收藏成功提示可加备注并撤销，采用最新修订', await page.locator(`[data-record-id="${groupRecordId}"]`).count() === 0);
+    await page.getByRole('button', { name: '撤销删除', exact: true }).click();
+    await page.locator(`[data-record-id="${groupRecordId}"]`).getByText('备注：群聊备注验收').waitFor();
+    check('无浏览器运行错误', errors.length === 0);
+} catch (e) {
+    console.error(e); await page.screenshot({ path: output + '/failure.png' }).catch(() => {}); process.exitCode = 1;
+} finally {
+    await page.close().catch(() => {});
+    await login('default-user');
+    if (createdGroup?.id) await post('/api/groups/delete', { id: createdGroup.id });
+    await post('/api/chats/delete', { avatar_url: avatar, chatfile: file });
+    const deletedB = await post('/api/users/delete', { handle: bUser, purge: true });
+    if (!deletedB.ok()) { errors.push(`Fixture B cleanup HTTP ${deletedB.status()}`); process.exitCode = 1; }
+    await fs.writeFile(output + '/results.json', JSON.stringify({ mode, results, errors, passed: !process.exitCode }, null, 2));
+    await browser.close();
+}

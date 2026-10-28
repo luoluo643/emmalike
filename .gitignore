@@ -1,0 +1,8 @@
+node_modules/
+tests/config/
+tests/data/
+tests/plugins/
+tests/extensions/
+tests/installation.json
+tests/e2e-*-p[0-9]*.mjs
+.vite-*/

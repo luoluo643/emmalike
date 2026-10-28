@@ -1,0 +1,8 @@
+.tltest-panel {
+    border: 1px solid rgb(120, 90, 60);
+    padding: 4px 8px;
+}
+
+.tltest-content {
+    color: rgb(1, 2, 3);
+}

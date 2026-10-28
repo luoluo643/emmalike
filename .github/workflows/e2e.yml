@@ -1,0 +1,102 @@
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Mondays 03:23 UTC: catches upstream SillyTavern changes before friends run into them.
+    - cron: '23 3 * * 1'
+
+jobs:
+  e2e:
+    name: SillyTavern ${{ matrix.st }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        st: ['1.16.0', '1.17.0', '1.18.0', '1.19.0', 'latest', 'staging']
+    # The supported releases (1.16 and later, the ones TESTED_VERSIONS lists) gate the build; newer upstream versions
+    # report without blocking.
+    continue-on-error: ${{ !contains(fromJSON('["1.16.0", "1.17.0", "1.18.0", "1.19.0"]'), matrix.st) }}
+    env:
+      ST_IMAGE: ghcr.io/sillytavern/sillytavern:${{ matrix.st }}
+      ST: http://127.0.0.1:8031
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Committed build matches the source
+        if: matrix.st == '1.19.0'
+        run: |
+          npm run build
+          git diff --exit-code -- app
+
+      - name: Install headless Chromium
+        run: npx playwright-core install --with-deps --only-shell chromium
+
+      - name: Start SillyTavern and the mock model service
+        run: tests/prepare.sh
+
+      - name: Main flow
+        run: node tests/e2e.mjs "$ST" default-user test1234 200 5000
+
+      - name: M0 regressions
+        run: node tests/e2e-m0.mjs "$ST" default-user test1234 200 5000
+
+      - name: M1 reader acceptance
+        run: node tests/e2e-m1.mjs "$ST" default-user test1234 200 5000
+
+      - name: M2 library and management
+        run: node tests/e2e-m2.mjs "$ST" default-user test1234 200 5000
+
+      - name: M3 writing in the shell
+        run: node tests/e2e-m3.mjs "$ST" default-user test1234 200 5000
+
+      - name: M5 frontend cards and extension panels
+        run: node tests/e2e-m5.mjs "$ST" default-user test1234 200 5000
+
+      - name: M6 reasoning, buttons and floating layers
+        run: node tests/e2e-m6.mjs "$ST" default-user test1234 200 5000
+
+      - name: 0.8.1 walkthrough fixes (reply after stop, back gesture, persona)
+        run: node tests/e2e-m7.mjs "$ST" default-user test1234 200 5000
+
+      - name: 0.9.0 model switching, export, bookshelf, install, reminders
+        run: node tests/e2e-m8.mjs "$ST" default-user test1234 200 5000
+
+      - name: 0.10.0 newcomer setup, plain wording, shorter menus
+        run: node tests/e2e-m9.mjs "$ST" default-user test1234 200 5000
+
+      - name: 0.11.0 sample character, numbered stories, personas and renaming in the shell
+        run: node tests/e2e-m10.mjs "$ST" default-user test1234 200 5000
+
+      - name: 0.12.0 world books and the preset in plain words
+        run: node tests/e2e-m11.mjs "$ST" default-user test1234 200 5000
+
+      - name: First-run account
+        run: node tests/e2e-onboarding.mjs
+
+      - name: Reading, queue cancellation and preset save reliability
+        run: |
+          npm run test:unit
+          node tests/e2e-reliability.mjs "$ST" default-user test1234
+
+      - name: Personal records and read-only comparisons
+        run: |
+          node tests/e2e-personal.mjs "$ST" device
+
+      - name: Tavern Helper install and updates
+        run: node tests/e2e-upkeep.mjs "$ST" default-user test1234
+
+      - name: Server logs
+        if: failure()
+        working-directory: tests
+        run: docker compose logs --tail 300

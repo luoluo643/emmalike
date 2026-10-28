@@ -1,0 +1,21 @@
+services:
+  st:
+    image: ${ST_IMAGE:-ghcr.io/sillytavern/sillytavern:1.19.0}
+    environment:
+      - NODE_ENV=production
+    ports:
+      - "127.0.0.1:${ST_PORT:-8031}:8000"
+    volumes:
+      - "./config:/home/node/app/config"
+      - "./data:/home/node/app/data"
+      - "./plugins:/home/node/app/plugins"
+      - "./extensions:/home/node/app/public/scripts/extensions/third-party"
+    mem_limit: 1g
+  mock:
+    image: node:22-alpine
+    command: ["node", "/mock/mock-llm.mjs"]
+    ports:
+      - "127.0.0.1:${MOCK_PORT:-5001}:5001"
+    volumes:
+      - "./mock-llm.mjs:/mock/mock-llm.mjs:ro"
+    mem_limit: 64m

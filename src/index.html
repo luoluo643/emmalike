@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#1c1b1f">
+    <!-- Added to the home screen it opens full screen, like an app. -->
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icon-192.png" type="image/png">
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="轻酒馆">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>轻酒馆</title>
+    <script>
+        try {
+            var add = function (id, css) {
+                if (!css) return;
+                var style = document.createElement('style');
+                style.id = id;
+                style.textContent = css;
+                document.head.appendChild(style);
+            };
+            // The look of the account that used this browser last (kept per account; unscoped before that).
+            var owner = localStorage.getItem('tavern-lite:display-owner');
+            var mine = function (part, legacy) {
+                var value = owner && localStorage.getItem('tavern-lite:appearance:v1:' + JSON.stringify(owner) + ':' + part);
+                return value !== null && value !== undefined && value !== '' ? value : localStorage.getItem(legacy);
+            };
+            add('tl-reading-css', mine('reading-css', 'tavern-lite:reading-css'));
+            // New UI scale is independent of legacy cached reading CSS, including before the bundle loads.
+            var display = owner && JSON.parse(localStorage.getItem('tavern-lite:display:v1:' + JSON.stringify(owner)));
+            if (display && display.schemaVersion === 1 && Number.isFinite(Number(display.fontSize))) {
+                add('tl-display-boot', ':root { --tl-ui-font-size: ' + Math.max(14, Math.min(26, Math.round(display.fontSize))) + 'px; }');
+            }
+            add('tl-user-css', /[?&]safe\b/.test(location.search) ? '' : mine('custom-css', 'tavern-lite:custom-css'));
+        } catch (e) { }
+    </script>
+</head>
+<body>
+    <div id="root"><div class="tl-boot">正在打开…</div></div>
+    <script type="module" src="./main.jsx"></script>
+</body>
+</html>

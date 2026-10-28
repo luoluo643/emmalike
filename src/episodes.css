@@ -1,0 +1,82 @@
+@layer tl-base {
+    .tl-episode-tag { font-size: .72em; white-space: nowrap; }
+    .tl-episodes-sheet { --tl-sheet-max-height: calc(var(--tl-viewport-height, 100dvh) - 12px - env(safe-area-inset-top)); }
+    .tl-episodes-body .tl-episode-heading, .tl-episodes-body .tl-episode-section { padding: 12px 18px; }
+    .tl-episode-section + .tl-episode-section { border-top: 1px solid var(--tl-border); }
+    .tl-episode-heading p, .tl-episode-section p { margin: .5em 0; overflow-wrap: anywhere; }
+    .tl-episode-section h3 { margin: .4em 0 .7em; font-size: 1em; }
+    .tl-episode-switch { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+    /* The checkbox drawn as the app's switch (same track and knob as .tl-switch-row), on the right like the other rows. */
+    .tl-episode-switch { flex-direction: row-reverse; justify-content: space-between; cursor: pointer; }
+    .tl-episode-switch input { appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 40px; height: 24px; margin: 0;
+        border-radius: 12px; background: var(--tl-border); cursor: pointer; transition: background .15s; }
+    .tl-episode-switch input::before { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%;
+        background: var(--tl-bg); transition: left .15s; }
+    .tl-episode-switch input:checked { background: var(--tl-accent); }
+    .tl-episode-switch input:checked::before { left: 19px; }
+    .tl-episode-switch input:focus-visible { outline: 3px solid var(--tl-accent); outline-offset: 2px; }
+    .tl-episode-switch input:disabled { opacity: .6; cursor: not-allowed; }
+    @media (prefers-reduced-motion: reduce) { .tl-episode-switch input, .tl-episode-switch input::before { transition: none; } }
+    .tl-episodes-body .tl-episode-options { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    .tl-episode-options button[aria-checked="true"] { font-weight: 700; box-shadow: inset 0 -3px var(--tl-accent); }
+    .tl-episode-list-row { display: flex; align-items: center; gap: 8px; }
+    .tl-episode-list-row > .tl-sheet-item { min-width: 0; flex: 1; }
+    .tl-episode-list-row > .tl-button { flex: none; }
+    .tl-episode-form label { display: grid; gap: 8px; margin: 12px 0; }
+    .tl-episode-request { min-height: 130px; resize: vertical; }
+    .tl-episode-request-preview { margin: 12px 0; padding: 12px; border-inline-start: 3px solid var(--tl-accent); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 35dvh; overflow: auto; }
+    .tl-episode-destination { font-weight: 700; overflow-wrap: anywhere; }
+    .tl-episode-bar { display: flex; align-items: center; gap: 8px; padding: 4px 16px; flex-wrap: wrap; }
+    .tl-episode-bar > span { min-width: 0; flex: 1; overflow-wrap: anywhere; font-size: .78em; }
+    .tl-episode-bar > button { min-height: 44px; }
+    /* With the quick-row toggle the bar stays one line on phones: the story name gives way (ellipsis). */
+    .tl-episode-bar[data-quick] { flex-wrap: nowrap; gap: 6px; }
+    .tl-episode-bar[data-quick] > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tl-episode-bar[data-quick] > button { white-space: nowrap; }
+    .tl-episode-bar > .tl-quick-toggle { min-width: 40px; padding: 0 8px; font-size: 1.1em; line-height: 1; }
+    @media (max-width: 480px) { .tl-episode-bar[data-quick] > button { min-height: 38px; padding-inline: 10px; } }
+}
+
+.tl-storyline-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tl-storyline-actions:empty { display: none; }
+.tl-storyline-new { gap: 8px; align-items: center; }
+.tl-storyline-new .tl-input { flex: 1; min-width: 0; }
+
+/* Where the author is, with the way back beside it. */
+.tl-episode-here { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tl-episode-here > p { flex: 1; min-width: 0; margin: .3em 0; }
+/* Records that need a look come first. */
+.tl-episode-attention { background: color-mix(in srgb, var(--tl-accent) 7%, transparent); }
+.tl-episodes-body .tl-more-fields > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.tl-episodes-body .tl-more-fields > :not(summary) + * { margin-top: 10px; }
+.tl-episode-actions { flex-wrap: wrap; gap: 8px; }
+/* Sending: three steps, the one under way with its ring, done ones dimmed. */
+.tl-episode-steps { margin: 12px 0; padding-inline-start: 1.4em; display: grid; gap: 8px; }
+.tl-episode-steps li[data-state="done"] { color: var(--tl-text-muted); }
+.tl-episode-steps li[data-state="now"] { font-weight: 700; }
+.tl-episode-steps li[data-state="later"] { opacity: .55; }
+.tl-episode-live { margin: 8px 0; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--tl-text) 5%, transparent);
+    font-size: .9em; line-height: 1.6; overflow-wrap: anywhere; }
+
+/* The way back to the 正文 from inside a line: a slim bar under the reader header, hiding with it. */
+.tl-branch-path { position: absolute; inset: calc(var(--tl-header-height) + env(safe-area-inset-top)) 0 auto; z-index: 4;
+    display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 var(--tl-page-margin, 16px); font-size: .85em;
+    background: var(--tl-header-bg); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.2s; }
+.tl-branch-path[data-hidden="true"] { transform: translateY(calc(-100% - var(--tl-header-height) - env(safe-area-inset-top))); opacity: 0; }
+.tl-branch-path .tl-link { min-height: 32px; padding: 0 4px; }
+.tl-branch-path-here { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tl-text-muted); }
+.tl-branch-path ~ .tl-messages { padding-top: calc(var(--tl-header-height) + env(safe-area-inset-top) + 44px); }
+/* Where lines leave the 正文: under that message, each one a tap away. */
+.tl-branch-marks { display: grid; gap: 6px; margin-top: -0.6em; }
+.tl-branch-mark { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 12px; text-align: start; font: inherit; font-size: .88em;
+    color: var(--tl-accent); background: color-mix(in srgb, var(--tl-accent) 6%, transparent); border: 1px solid color-mix(in srgb, var(--tl-accent) 35%, transparent);
+    border-radius: 10px; cursor: pointer; }
+.tl-branch-mark svg { flex: none; margin-top: .2em; }
+.tl-branch-mark-text { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.tl-branch-mark-hint { color: var(--tl-text-muted); font-size: .9em; }
+/* Inside a line: where the copied 正文 ends and the line's own writing starts. */
+.tl-branch-divider { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--tl-text-muted); font-size: .82em; text-align: center; }
+.tl-branch-divider::before, .tl-branch-divider::after { content: ""; flex: 1; border-top: 1px solid var(--tl-border); }
+/* The 番外与平行线 sheet as a tree: the 正文, then its lines under it. */
+.tl-episode-list-row[data-depth="1"] { margin-inline-start: 10px; padding-inline-start: 10px; border-inline-start: 2px solid var(--tl-border); }

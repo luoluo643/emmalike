@@ -1,0 +1,10 @@
+{
+    "display_name": "轻酒馆测试面板",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "tavern-lite tests",
+    "version": "1.0.0"
+}
