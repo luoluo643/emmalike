@@ -54,3 +54,14 @@ export function applyPatch(lines, patch) {
     for (let i = 0; i < length; i++) if (typeof out[i] !== 'string') return null;
     return out;
 }
+
+/**
+ * A save made while SillyTavern is switching stories: it has emptied its chat and taken the next file's name but not
+ * read that file yet (openCharacterChat: clearChat → chat name → getChat). Anything that saves in that gap (a debounced
+ * metadata save, an extension) would replace the whole story with an empty one, and with no integrity mark the server's
+ * check lets it through. The app's own read always marks a chat first, so entries with no mark and no messages are
+ * never a story's real content.
+ */
+export function isSwitchGapSave(entries) {
+    return Array.isArray(entries) && entries.length <= 1 && !entries[0]?.chat_metadata?.integrity;
+}

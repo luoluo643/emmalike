@@ -5,7 +5,7 @@
 // A kept save is only ever applied to the exact file it was made from: when the story was changed elsewhere in
 // between, the server's version stays and the user is told. With the plugin, the app's read of the story the shell
 // has just read is answered from the shell's copy when the file is unchanged, so a long story downloads once.
-import { applyPatch, diffLines, hashLines } from '../server-chat-save/chat-diff.mjs';
+import { applyPatch, diffLines, hashLines, isSwitchGapSave } from '../server-chat-save/chat-diff.mjs';
 import { EPISODE_NAMESPACE } from './episode-model.js';
 
 const PLUGIN = '/api/plugins/tavern-lite-save';
@@ -293,6 +293,12 @@ export async function saveThroughSync(win, send, input, init) {
     try { payload = text === null ? null : JSON.parse(text); } catch { /* sent as it is */ }
     if (!payload || !Array.isArray(payload.chat) || typeof payload.avatar_url !== 'string' || payload.file_name === undefined) return send(input, init);
     const info = { avatar: payload.avatar_url, file: String(payload.file_name), chName: payload.ch_name };
+    // Not sent: it would empty the story the app is about to open (see isSwitchGapSave). The app reads the file next
+    // and saves its real content with a mark from then on.
+    if (isSwitchGapSave(payload.chat)) {
+        console.warn('[tavern-lite] a save made while switching stories was not sent', info.file);
+        return okFor(win);
+    }
     const key = keyOf(handle, info.avatar, info.file);
     const lines = payload.chat.map(entry => JSON.stringify(entry));
     // A 番外 file has its own record of saves that did not go through and recovers them itself (bridge-episodes.js):

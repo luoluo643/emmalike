@@ -5,7 +5,7 @@
 // SillyTavern's own save (its integrity check and backups), and only the signed-in account's chats are touched.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { applyPatch, hashLines } from './chat-diff.mjs';
+import { applyPatch, hashLines, isSwitchGapSave } from './chat-diff.mjs';
 
 export const info = {
     id: 'tavern-lite-save',
@@ -94,6 +94,8 @@ export async function init(router) {
                 if (!next) return { status: 400, body: { error: 'patch' } };
                 let chat;
                 try { chat = next.map(line => JSON.parse(line)); } catch { return { status: 400, body: { error: 'patch' } }; }
+                // A story with messages is never replaced by an unmarked empty one (see isSwitchGapSave).
+                if (isSwitchGapSave(chat) && lines.length > 1) return { status: 400, body: { error: 'integrity' } };
                 try {
                     await save(chat, where.target, false, req.user.profile.handle, where.cardName, req.user.directories.backups);
                 } catch (error) {

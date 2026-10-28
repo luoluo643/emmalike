@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPatch, diffLines, hashLines, hashText } from '../server-chat-save/chat-diff.mjs';
+import { applyPatch, diffLines, hashLines, hashText, isSwitchGapSave } from '../server-chat-save/chat-diff.mjs';
 
 const chat = n => [JSON.stringify({ chat_metadata: { integrity: 'x' } }), ...Array.from({ length: n }, (_, i) => JSON.stringify({ mes: `第${i}条 “引号” \n 换行`, is_user: i % 2 === 0 }))];
 
@@ -41,4 +41,18 @@ test('a malformed patch, or one that leaves a line unknown, is refused', () => {
 test('the bridge copy of the line hash and diff is the plugin one', async () => {
     const lines = await import('../src/chat-lines.js');
     for (const name of ['hashLines', 'diffLines', 'hashText']) assert.equal(String(lines[name]), String({ hashLines, diffLines, hashText }[name]), name);
+});
+
+test('a save from the gap while the app switches stories is told apart from real content', () => {
+    // What reaches the server: the next story's name, no messages, metadata a script wrote with no mark.
+    assert.equal(isSwitchGapSave([{ chat_metadata: { variables: { a: 1 }, timedWorldInfo: {} }, user_name: 'unused' }]), true);
+    assert.equal(isSwitchGapSave([{ chat_metadata: {} }]), true);
+    assert.equal(isSwitchGapSave([{}]), true);
+    assert.equal(isSwitchGapSave([]), true);
+    // The app's own saves: a read always marks the chat first, even one that is only a header (no greeting).
+    assert.equal(isSwitchGapSave([{ chat_metadata: { integrity: 'x' } }]), false);
+    assert.equal(isSwitchGapSave(chat(0).map(line => JSON.parse(line))), false);
+    // Anything with messages is content, marked or not (chats from before integrity marks existed).
+    assert.equal(isSwitchGapSave([{ chat_metadata: {} }, { mes: '你好' }]), false);
+    assert.equal(isSwitchGapSave(null), false);
 });
