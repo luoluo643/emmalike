@@ -24,6 +24,8 @@ import { supportedNativeVersion } from './bridge-native-settle.js';
 import { scanExtensions } from './bridge-extension-scan.js';
 import { createNativeWorldEditor } from './bridge-world-editor-native.js';
 import { createNativePresetEditor } from './bridge-preset-editor-native.js';
+import { LINES_KEY, LINE_FIELD, ownState, planLineAction } from './src/own-lines.js';
+import { lineDirective } from './src/inline-episodes.js';
 
 const API_VERSION = 1;
 const SETTLE_MS = 800;
@@ -600,13 +602,21 @@ function deleteMessageAt(index, { swipeOnly = false } = {}) {
         const message = ctx().chat?.[index];
         if (!message) throw new Error('这条消息不在了，刷新一下');
         await revealMessage(index);
+        // The message a line starts at (the shell's own record): the message after it starts the line instead, so
+        // what follows stays on it.
+        const next = ctx().chat[index + 1];
+        const moved = !swipeOnly && message[LINE_FIELD] && next && !next[LINE_FIELD] && !horaeStorylines() ? next : null;
+        if (moved) moved[LINE_FIELD] = message[LINE_FIELD];
         if (swipeOnly) {
             if (!(message.swipes?.length > 1) || typeof st.deleteSwipe !== 'function') throw new Error('这条消息只有一个回复');
             await st.deleteSwipe(message.swipe_id ?? 0, index);
         } else {
             const before = ctx().chat.length;
             await st.deleteMessage(index);
-            if (ctx().chat.length >= before) throw new Error('没删掉，再试一次');
+            if (ctx().chat.length >= before) {
+                if (moved) delete moved[LINE_FIELD];
+                throw new Error('没删掉，再试一次');
+            }
         }
         await waitFor(() => !st.isChatSaving, 10000);
     });
@@ -806,7 +816,8 @@ function extensionPanels(index) {
 
 // Horae storylines: a story's main text and its 番外 each keep their own memory; the line in use decides what is sent.
 // Read through Horae's public API; changes go through Horae's own storyline buttons (it listens for their clicks on
-// the page), so its rules for switching stay in one place.
+// the page), so its rules for switching stay in one place. Without Horae (or with its storylines off) the shell keeps
+// its own record of the lines in the same shape (src/own-lines.js): shown the same way, nothing filtered when sending.
 const STORYLINE_MAIN = 'main';
 
 function horaeStorylines() {
@@ -818,20 +829,108 @@ function horaeStorylines() {
 
 function storylineState() {
     const data = horaeStorylines();
-    if (!data) return null;
-    const title = id => !id || id === STORYLINE_MAIN ? '正文' : `番外·${data.lines?.[id]?.title || '番外'}`;
+    if (!data) return ownLineState();
+    const title = id => !id || id === STORYLINE_MAIN ? '正文' : `番外 · ${data.lines?.[id]?.title || '番外'}`;
     const lines = [{ id: STORYLINE_MAIN, label: '正文' }, ...Object.entries(data.lines ?? {})
         .filter(([, line]) => !line?.deleted).map(([id]) => ({ id, label: title(id) }))];
     // Horae's `active` is already the line a pending switch goes to; the line written so far is the last floor's.
     const here = data.segments?.at(-1)?.id || data.active || STORYLINE_MAIN;
     const pending = data.pending && data.pending !== here && lines.some(l => l.id === data.pending) ? data.pending : null;
-    return { multi: !!data.multi, active: here, label: title(here), pending, pendingLabel: pending ? title(pending) : '', lines };
+    // Each line's messages (segments) and titles/parents (registry): the shell reads each line as a story of its own.
+    const segments = Array.isArray(data.segments) ? data.segments.map(s => ({ id: s.id, start: s.start, end: s.end })) : null;
+    // A kind chosen by hand in the shell is kept in its own record (Horae knows only 番外).
+    const kinds = ownState([], ctx().chatMetadata).kinds;
+    const registry = Object.fromEntries(Object.entries(data.lines ?? {}).map(([id, line]) => [id,
+        { title: line?.title ?? '', parent: line?.parent ?? null, kind: kinds[id] ?? line?.kind ?? null, deleted: !!line?.deleted }]));
+    return { source: 'horae', multi: !!data.multi, active: here, label: title(here), pending, pendingLabel: pending ? title(pending) : '', lines, segments, registry, kinds };
+}
+
+/** The shell's own record of the open story's lines, when Horae does not keep them. */
+function ownLineState() {
+    const c = ctx();
+    if (!currentChat()?.file) return null;
+    return ownState(c.chat ?? [], c.chatMetadata);
+}
+
+function writeLinePlan({ marks, registry }) {
+    const c = ctx();
+    for (const [i, line] of marks) {
+        const message = c.chat?.[i];
+        if (!message) continue;
+        if (line) message[LINE_FIELD] = line;
+        else delete message[LINE_FIELD];
+    }
+    st.updateChatMetadata({ [LINES_KEY]: registry }, false);
+}
+
+const OWN_LINE_ACTIONS = ['to-main', 'to-line', 'clear-pending', 'new-next', 'mark', 'unmark', 'set-kind', 'rename', 'apply-suggestions'];
+
+/**
+ * The shell's own line record changed and saved by the app's own save (never by writing the file). `scope` is the
+ * story the page shows; a kind set by hand is kept also when Horae keeps the lines.
+ */
+function ownLineAction(action, options = {}) {
+    if (!OWN_LINE_ACTIONS.includes(action)) return Promise.reject(new Error('不认识的故事线操作'));
+    return enqueue(async () => {
+        await waitIdle();
+        if (horaeStorylines() && action !== 'set-kind') throw new Error('Horae 的故事线开着，换线和划楼在原版界面 Horae 的「时间线」页里做');
+        const here = currentChat(), scope = options.scope;
+        if (!here?.file || scope && (scope.avatar !== here.avatar || chatId(scope.file) !== here.file)) throw new Error('故事已切换，请重新打开');
+        const c = ctx();
+        // An empty story is what the app holds while it switches stories: never saved over a story (tl-emptyguard).
+        if (!c.chat?.length) throw new Error('故事里还没有消息');
+        const plan = planLineAction(c.chat, c.chatMetadata, action, options, () => `tl-line-${utils.uuidv4().slice(0, 8)}`);
+        if (plan) {
+            writeLinePlan(plan);
+            await c.saveChat();
+        }
+        await sleep(SETTLE_MS);
+        emit('chat');
+        return storylineState();
+    });
+}
+
+/**
+ * The message just sent starts the line asked for (own record only; Horae marks its own). Sent without the shell's
+ * send (the full app's input, a quick reply), what the request says is read here, as the shell reads it on sending.
+ * Saved with the story. Not while a 番外 is sent into a story of its own: that story is the 番外.
+ */
+function markSentLine(index) {
+    if (horaeStorylines() || episodeFlow.episodeNavigationBusy()) return;
+    const c = ctx(), at = Number(index), message = c.chat?.[at];
+    if (!message?.is_user) return;
+    let plan = null;
+    try {
+        plan = planLineAction(c.chat, c.chatMetadata, 'apply-pending', { index: at })
+            ?? planLineAction(c.chat, c.chatMetadata, 'detected', { index: at, directive: lineDirective(message.mes) }, () => `tl-line-${utils.uuidv4().slice(0, 8)}`);
+    } catch { return; }
+    if (!plan) return;
+    writeLinePlan(plan);
+    // The app saved the story right before announcing the message; this mark goes in the next save, made now so a
+    // reply that never comes does not lose it.
+    Promise.resolve(c.saveChat()).catch(() => {});
+}
+
+/**
+ * Asks the connected model one question outside the story (nothing of the story is added): for the shell's
+ * "让 AI 帮忙分段", which shows the author what it sends first.
+ */
+function askModel(prompt) {
+    return enqueue(async () => {
+        await waitIdle();
+        await ensureConnected();
+        const c = ctx();
+        if (typeof c.generateRaw !== 'function') throw new Error('这个酒馆版本不支持，请升级后再试');
+        return String(await c.generateRaw({ prompt: String(prompt ?? ''), responseLength: 1500 }) ?? '');
+    });
 }
 
 const STORYLINE_ACTIONS = ['to-main', 'to-line', 'clear-pending', 'new-next'];
 
 /** Next message on another line: 'to-main', 'to-line' (with `line`), 'new-next' (with `title`) or 'clear-pending'. */
-function storylineAction(action, { line = '', title = '' } = {}) {
+function storylineAction(action, options = {}) {
+    if (!horaeStorylines() || action === 'set-kind') return ownLineAction(action, options);
+    const { line = '', title = '' } = options;
     if (!STORYLINE_ACTIONS.includes(action)) return Promise.reject(new Error('不认识的故事线操作'));
     return enqueue(async () => {
         await waitIdle();
@@ -2176,11 +2275,14 @@ function savePreset() {
     });
 }
 
-function snapshot(limit) {
+/** The last `limit` messages of the story, or of `pick` (ascending message numbers: one line of it) when given. */
+function snapshot(limit, pick = null) {
     const chat = ctx().chat ?? [];
-    const start = Math.max(0, chat.length - limit);
+    const chosen = Array.isArray(pick) ? pick.filter(i => Number.isSafeInteger(i) && i >= 0 && i < chat.length) : null;
+    const indexes = chosen ? chosen.slice(Math.max(0, chosen.length - limit))
+        : Array.from({ length: Math.min(limit, chat.length) }, (_, n) => chat.length - Math.min(limit, chat.length) + n);
     const messages = [];
-    for (let i = start; i < chat.length; i++) {
+    for (const i of indexes) {
         const m = chat[i];
         messages.push({
             index: i,
@@ -2198,7 +2300,7 @@ function snapshot(limit) {
             meta: messageMeta(i, m),
         });
     }
-    return { total: chat.length, messages, display: displaySettings(), storyline: storylineState() };
+    return { total: chosen ? chosen.length : chat.length, storyTotal: chat.length, messages, display: displaySettings(), storyline: storylineState() };
 }
 
 function attach() {
@@ -2214,6 +2316,7 @@ function attach() {
         if (settleTimer) settle();
         emit('chat');
     };
+    if (types.MESSAGE_SENT) c.eventSource.on(types.MESSAGE_SENT, markSentLine);
     for (const key of ['MESSAGE_RECEIVED', 'MESSAGE_SENT', 'MESSAGE_DELETED', 'MESSAGE_EDITED', 'MESSAGE_SWIPED', 'MESSAGE_UPDATED',
         'CHAT_CHANGED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'MORE_MESSAGES_LOADED']) {
         if (types[key]) c.eventSource.on(types[key], refresh);
@@ -2538,7 +2641,9 @@ window.TavernLiteBridge = Object.freeze({
     setPersona,
     modelChoices,
     storylineState,
+    storyLength: () => ctx().chat?.length ?? 0,
     storylineAction,
+    askModel,
     connectionConfigured,
     modelOptions,
     setupConnection,

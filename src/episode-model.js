@@ -134,7 +134,8 @@ export async function fingerprintChat(file) {
     return { algorithm: 'sha256-json-v1', hash: await digestHex(bytes) ?? sha256(canonical), utf8Bytes: bytes.length };
 }
 
-const IGNORED_METADATA = new Set([EPISODE_NAMESPACE, 'integrity', 'chat_id_hash']);
+// tavern_lite_lines: the lines written inside this story (own-lines.js); a copy is a story of its own and starts without them.
+const IGNORED_METADATA = new Set([EPISODE_NAMESPACE, 'integrity', 'chat_id_hash', 'tavern_lite_lines']);
 /**
  * A 番外 that does not continue the story still keeps the story's persona lock, and Horae's one-time migration marker
  * (without it Horae migrates and saves the new story as soon as it is opened).

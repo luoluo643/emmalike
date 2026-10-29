@@ -41,32 +41,59 @@ const tidy = text => String(text).replace(/^[\s#①-⑳\d.、:：|｜*_`]+/, '')
 const storyReply = x => !x?.is_user && (!x?.is_system || (x.hidden ?? !(x.extra?.type || x.extra?.isSmallSys)));
 const titleLike = text => !!text && text.length >= 2 && text.length <= 30 && WORDY.test(text) && !NOT_TITLE.test(text);
 
-function titleFor(request, reply) {
+const titleFor = (request, reply) => titleParts(request, reply).title;
+// The title and whether it says little (the request's words as they are: nothing named, no heading, no clause left).
+function titleParts(request, reply) {
     const asked = plain(request);
     const named = asked.match(NAMED);
     const name = tidy(named?.[1] ?? named?.[2] ?? named?.[3] ?? '');
-    if (titleLike(name)) return name;
+    if (titleLike(name)) return { title: name, weak: false };
     // The author's own heading on the request ("# 旧照片2"), then the reply's.
     for (const lines of [said(request).split('\n').slice(0, 2), storyPart(reply).split('\n').slice(0, 8)]) {
         for (const line of lines.map(l => l.trim()).filter(Boolean)) {
             const m = line.match(HEADING);
             const heading = tidy(m?.[1] ?? m?.[2] ?? m?.[3] ?? m?.[4] ?? '');
-            if (titleLike(heading)) return heading;
+            if (titleLike(heading)) return { title: heading, weak: false };
         }
     }
     // What it is about: the words after 内容为/主要内容是…, else the request without its instructions.
     const about = asked.split(/(?:大概|大致|主要)?内容(?:(?:是|为)\s*[:：]?|\s*[:：])/).slice(1).join(' ').trim();
-    const clauses = (about || asked).replace(/^#{1,6}[^\n]*\n/, '').split(/[，,。；;！!？?\n（）()]+/).map(c => c.replace(/^[\s$]+/, '').trim())
+    const clauses = (about || asked).replace(/^#{1,6}[^\n]*\n/, '').split(/[，,。；;！!？?\n（）():：]+/).map(c => c.replace(/^[\s$]+/, '').trim())
         .filter(c => c && (about || !NOISE.test(c)));
-    return (clauses.join('，') || asked).replace(/\s+/g, ' ').slice(0, 24) || '番外';
+    const title = (clauses.join('，') || asked).replace(/\s+/g, ' ').slice(0, 24) || '番外';
+    return { title, weak: !clauses.length };
 }
+
+const starts = ({ text }) => START.test(text), backs = ({ text }) => BACK.test(text.replace(NEGATED, ' '));
+
+/**
+ * What one request of the author's says about the story's lines: { action: 'start', kind, title }, { action: 'back' }
+ * or null. The rules findInlineEpisodes reads a whole story with, and Horae's storylines read a request with.
+ */
+export function lineDirective(request, reply = '') {
+    const text = said(request);
+    if (starts({ text })) return { action: 'start', kind: kindOf(text), ...titleParts(request, reply) };
+    return backs({ text }) ? { action: 'back' } : null;
+}
+
+/**
+ * The name to show for a line named from a request that said little (`auto` in own-lines.js): named again with the
+ * reply it got, its heading for example; null when there is nothing better.
+ */
+export function lineName(line, messages, first) {
+    if (!line?.auto || !messages?.[first]?.is_user) return null;
+    const reply = messages.slice(first + 1, first + 4).find(storyReply)?.mes;
+    return reply ? lineDirective(messages[first].mes, reply)?.title ?? null : null;
+}
+
+/** The kind a request asks for when it starts a line ('side', 'parallel', 'skit'), or null when it starts none. */
+export const requestKind = request => { const text = said(request); return starts({ text }) ? kindOf(text) : null; };
 
 /** [{ from, to, requestIndex, title, kind, count }] in story order; messages as stored ({ is_user, is_system, mes }). */
 export function findInlineEpisodes(messages) {
     const list = Array.isArray(messages) ? messages : [];
     // Requests hidden from the AI afterwards (/hide) are still the author's requests.
     const asks = list.map((m, i) => ({ i, m, text: said(m?.mes) })).filter(({ m }) => m?.is_user && typeof m.mes === 'string');
-    const starts = ({ text }) => START.test(text), backs = ({ text }) => BACK.test(text.replace(NEGATED, ' '));
     const found = [];
     for (let k = 0; k < asks.length; k++) {
         const { i, m } = asks[k];
@@ -80,4 +107,57 @@ export function findInlineEpisodes(messages) {
         found.push({ from: i, to, requestIndex: i, title: titleFor(m.mes, reply), kind: kindOf(said(m.mes)), count: to - i + 1 });
     }
     return found;
+}
+
+/**
+ * Where an older story's lines start and end, read with the same rules: [{ index, action: 'start' | 'back', title,
+ * kind }], for the author to confirm before anything is marked (own-lines.js 'apply-suggestions').
+ */
+export function suggestLineMarks(messages) {
+    const list = Array.isArray(messages) ? messages : [];
+    const out = [];
+    for (const item of findInlineEpisodes(list)) {
+        if (item.from > 0) out.push({ index: item.from, action: 'start', title: item.title, kind: item.kind });
+        const after = item.to + 1, next = list[after];
+        // Ended by a request going back (not by the next 番外, which is a start of its own, nor by the end of the story).
+        if (next?.is_user && typeof next.mes === 'string' && !starts({ text: said(next.mes) })) out.push({ index: after, action: 'back' });
+    }
+    return out;
+}
+
+const HEAD = 60;
+/** The opening words of each of the author's requests: what "让 AI 帮忙分段" sends, and only that. */
+export function requestHeads(messages, head = HEAD) {
+    return (Array.isArray(messages) ? messages : []).map((m, index) => ({ index, m }))
+        .filter(({ m }) => m?.is_user && typeof m.mes === 'string')
+        .map(({ index, m }) => ({ index, text: plain(m.mes).replace(/\s+/g, ' ').slice(0, head) }))
+        .filter(({ text }) => text);
+}
+
+export function aiLinePrompt(heads) {
+    return [
+        '下面是一个故事里作者每次发言的开头，# 后面是楼层号。作者有时会让 AI 暂时写番外、平行线或小剧场，之后再回到正文。',
+        '请找出换线的楼层。「暂停剧情，自检……」这类检查不算换线；裸的「回到剧情」「继续剧情」是接着当前这条线写，也不算。',
+        '只回答一个 JSON 数组，不要别的文字。每项：{"floor": 楼层号, "action": "start" 或 "back", "kind": "side"（番外）/"parallel"（平行线）/"skit"（小剧场）, "title": "不超过 12 个字的名字"}。',
+        'start 是从这一楼起开一条新线，back 是从这一楼起回到正文。没有换线就回答 []。',
+        '',
+        ...heads.map(({ index, text }) => `#${index} ${text}`),
+    ].join('\n');
+}
+
+/** The model's answer as suggestions, keeping only floors that are the author's requests sent to it. */
+export function parseAiLines(answer, heads) {
+    // A thinking model's notes come first and may hold brackets of their own.
+    const text = String(answer ?? '').replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, '').replace(/```(?:json)?/gi, '');
+    const start = text.indexOf('['), end = text.lastIndexOf(']');
+    if (start < 0 || end <= start) return null;
+    let items;
+    try { items = JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+    if (!Array.isArray(items)) return null;
+    const asked = new Set(heads.map(h => h.index)), seen = new Set();
+    return items.map(item => ({ index: Number(item?.floor), action: item?.action === 'back' ? 'back' : item?.action === 'start' ? 'start' : null,
+        kind: ['side', 'parallel', 'skit'].includes(item?.kind) ? item.kind : 'side', title: String(item?.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 24) || '番外' }))
+        .filter(item => item.action && asked.has(item.index) && item.index > 0 && !seen.has(item.index) && seen.add(item.index))
+        .map(item => item.action === 'back' ? { index: item.index, action: 'back' } : item)
+        .sort((a, b) => a.index - b.index);
 }

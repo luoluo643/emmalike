@@ -174,7 +174,10 @@ export async function getChat(character, fileName) {
     rememberShellRead(character.avatar, chatId(fileName), read);
     const data = await withKeptChat(character.avatar, chatId(fileName), read);
     if (!Array.isArray(data)) return [];
-    return data.filter(m => m && typeof m.mes === 'string');
+    const messages = data.filter(m => m && typeof m.mes === 'string');
+    // The story's header rides along (Horae's storylines, a line's identity) for the preview before the app is ready.
+    messages.metadata = data.find(m => m && typeof m.mes !== 'string' && m.chat_metadata)?.chat_metadata ?? null;
+    return messages;
 }
 
 export async function getGroupChat(file) {

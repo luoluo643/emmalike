@@ -37,8 +37,9 @@
     @media (max-width: 480px) { .tl-episode-bar[data-quick] > button { min-height: 38px; padding-inline: 10px; } }
 }
 
-.tl-storyline-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.tl-storyline-actions:empty { display: none; }
+.tl-storyline-tree { display: grid; gap: 4px; }
+.tl-storyline-row { margin-inline-start: calc(var(--tl-line-depth, 0) * 12px); }
+.tl-storyline-row:not([data-depth="0"]) { padding-inline-start: 10px; border-inline-start: 2px solid var(--tl-border); }
 .tl-storyline-new { gap: 8px; align-items: center; }
 .tl-storyline-new .tl-input { flex: 1; min-width: 0; }
 
@@ -66,6 +67,14 @@
 .tl-branch-path[data-hidden="true"] { transform: translateY(calc(-100% - var(--tl-header-height) - env(safe-area-inset-top))); opacity: 0; }
 .tl-branch-path .tl-link { min-height: 32px; padding: 0 4px; }
 .tl-branch-path-here { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tl-text-muted); }
+/* Lines on the way (Horae's, inside the story): shortened so the line being read stays in view. */
+.tl-branch-path-step { flex: 0 1 auto; max-width: 9em; min-width: 2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+span.tl-branch-path-step { color: var(--tl-text-muted); }
+/* A line copied from the 正文 shows its own writing; the copy is one tap away. */
+.tl-copied-note { display: grid; gap: 8px; margin-bottom: 12px; padding: 12px 14px; font-size: .88em; color: var(--tl-text-muted); }
+.tl-copied-note p { margin: 0; }
+.tl-branch-divider .tl-link { flex: none; min-height: 32px; padding: 0 4px; }
+.tl-line-empty { text-align: center; }
 .tl-branch-path ~ .tl-messages { padding-top: calc(var(--tl-header-height) + env(safe-area-inset-top) + 44px); }
 /* Where lines leave the 正文: under that message, each one a tap away. */
 .tl-branch-marks { display: grid; gap: 6px; margin-top: -0.6em; }

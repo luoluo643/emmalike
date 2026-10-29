@@ -393,7 +393,8 @@ export function EpisodesSheet({ account, scope, characterName, currentTitle, dra
                         {!available && <p class="tl-muted">{status.enabled ? '现在不能分开写，原因在下面「更多」里' : '「分开写番外与平行线」关着，在下面「更多」里打开'}</p>}
                     </>}
                 </section>
-                {!isChild && <InlineEpisodesSection account={account} scope={scope} available={status.enabled && (status.extractable ?? status.verified) && !!bridge?.extractEpisode}
+                {/* Only once the list says this story is a 正文: a line copied from one carries its text, and those 番外 are the 正文's. */}
+                {graph && !isChild && <InlineEpisodesSection account={account} scope={scope} available={status.enabled && (status.extractable ?? status.verified) && !!bridge?.extractEpisode}
                     reasons={status.extractReasons ?? status.reasons} busy={busy} notify={notify}
                     onBusy={value => { setBusy(value); onBusyChange?.(value); }} onJump={onJump} onExtracted={() => load().catch(e => setError(friendlyError(e.message)))} />}
                 <section class="tl-episode-section"><details class="tl-more-fields" open={moreOpen || undefined} onToggle={e => setMoreOpen(e.currentTarget.open)}>

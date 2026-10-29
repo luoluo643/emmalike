@@ -2,7 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { findAnchor, fingerprint, messageMark, readStory, writeStory } from './story-state.js';
 
 const blocks = article => [...article.querySelectorAll('.tl-message-body p, .tl-message-body pre, .tl-message-body blockquote, .tl-message-body li')];
-export function useReadingPosition({ list, key, all, ready, limit, setLimit, nearBottom, notify }) {
+/**
+ * `rank(index)`, when the page shows one line of the story: how many of its messages from that one to the end (what
+ * has to be loaded to show it), or null for a message the line does not have.
+ */
+export function useReadingPosition({ list, key, all, ready, limit, setLimit, nearBottom, notify, rank = null }) {
     const session = useRef(null);
     const latest = useRef(null);
     const [away, setAway] = useState(false);
@@ -11,7 +15,7 @@ export function useReadingPosition({ list, key, all, ready, limit, setLimit, nea
         session.current = { key, saved, holding: !!saved && !saved.tail, loaded: false, notified: false };
         nearBottom.current = !session.current.holding;
     }
-    latest.current = { all, ready };
+    latest.current = { all, ready, rank };
     const capture = () => {
         const s = session.current, el = list.current, data = latest.current;
         if (!s?.loaded || !el || !data.ready || !data.all.length || s.holding) return;
@@ -38,7 +42,9 @@ export function useReadingPosition({ list, key, all, ready, limit, setLimit, nea
         const target = findAnchor(data.all, s.saved);
         if (!target) return;
         if (s.strict && !target.exact) { s.holding = false; notify('原文已改动或无法定位', 'info'); return; }
-        const needed = data.all.length - target.index + 1;
+        const needed = data.rank ? data.rank(target.index) : data.all.length - target.index + 1;
+        // A place on another line: this one opens at its end.
+        if (needed === null) { s.holding = false; s.loaded = true; nearBottom.current = true; el.scrollTop = el.scrollHeight; return; }
         if (limit < needed) { setLimit(n => Math.max(n, Math.ceil(needed / 40) * 40)); return; }
         const article = el.querySelector(`.tl-message[data-index="${target.index}"]`);
         if (!article) return;
@@ -85,10 +91,16 @@ export function useReadingPosition({ list, key, all, ready, limit, setLimit, nea
         if (event?.type === 'keydown' && !['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) return;
         session.current.holding = false;
     };
+    const lastHeight = useRef(0);
     const scroll = () => {
         if (session.current.holding) return;
         const el = list.current;
         if (!el) return;
+        // Content that grows under a reader at the end (extension panels, cards loading late) moves the page before the
+        // resize is seen: that is not the reader leaving the end.
+        const grew = el.scrollHeight > lastHeight.current && lastHeight.current > 0;
+        lastHeight.current = el.scrollHeight;
+        if (grew && nearBottom.current) { el.scrollTop = el.scrollHeight; setAway(false); capture(); return; }
         nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
         setAway(!nearBottom.current); capture();
     };

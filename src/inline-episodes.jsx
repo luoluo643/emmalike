@@ -3,7 +3,8 @@
 import { useMemo, useState } from 'preact/hooks';
 import * as engine from './engine.js';
 import { chatId } from './api.js';
-import { findInlineEpisodes } from './inline-episodes.js';
+import { findInlineEpisodes, lineName } from './inline-episodes.js';
+import { recordedEpisodes } from './own-lines.js';
 import { EPISODE_KINDS } from './episode-intent.js';
 import { SheetItem, Spinner } from './ui.jsx';
 
@@ -15,7 +16,14 @@ export function InlineEpisodesSection({ account, scope, available, reasons = [],
         const current = bridge?.currentChat?.();
         return current?.avatar === scope.avatar && chatId(current.file) === chatId(scope.file) ? bridge.readingMessages?.() ?? [] : null;
     }, [bridge, scope.avatar, scope.file]);
-    const found = useMemo(() => messages ? findInlineEpisodes(messages) : [], [messages]);
+    // Lines the story records (marked when written, or by hand) are its 番外 as they are; otherwise read from the wording.
+    const found = useMemo(() => {
+        if (!messages) return [];
+        const state = bridge?.storylineState?.();
+        return state?.source === 'lite' && state.multi
+            ? recordedEpisodes(state, (id, first) => lineName(state.registry[id], messages, first))
+            : findInlineEpisodes(messages);
+    }, [messages]);
     const variableCount = useMemo(() => messages ? bridge?.storyVariables?.() ?? 0 : 0, [messages]);
     const [form, setForm] = useState(null), [error, setError] = useState(''), [extracting, setExtracting] = useState(false);
     if (!messages) return null;

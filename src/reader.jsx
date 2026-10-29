@@ -16,12 +16,59 @@ import { useReadingPosition } from './reading-position.js';
 import { CaptureSheet, PersonalNotice, PersonalSheet } from './personal.jsx';
 import { makeSource, mutation, saveRecord, locateSource, requestSourceJump, takeSourceJump } from './personal-records.js';
 import { EpisodesSheet, episodeIdentity } from './episodes.jsx';
-import { StorylineSheet } from './storylines.jsx';
+import { LineFormSheet, LineMemorySheet, StorylineSheet } from './storylines.jsx';
 import { EPISODE_KINDS, detectEpisodeIntent } from './episode-intent.js';
+import { lineDirective, lineName, requestKind } from './inline-episodes.js';
 import { forksByIndex, storyBranches } from './branches.js';
+import { MAIN_LINE, idsFromMarks, lineView } from './line-view.js';
+import { ownIds, readRegistry } from './own-lines.js';
 import { TocSheet } from './toc.jsx';
 
 const PAGE = 40;
+
+/**
+ * What Horae has to be told so the next message goes on `line` (Horae's storyline state from the bridge), or null when
+ * it goes there already.
+ */
+function lineSwitch(state, line) {
+    if (!line || !state?.multi) return null;
+    const writing = state.pending || state.active;
+    if (line === writing) return null;
+    if (line === state.active) return 'clear-pending';
+    return line === MAIN_LINE ? 'to-main' : 'to-line';
+}
+
+/** Under a line's message where another of the story's lines (Horae) leaves it: one tap reads that line. */
+function LineMarks({ lines, onOpen }) {
+    return <div class="tl-branch-marks">{lines.map(line => (
+        <button key={line.id} class="tl-branch-mark" data-line={line.id} onClick={() => onOpen(line.id)}>
+            <Icon name="branch" size={15} />
+            <span class="tl-branch-mark-text">
+                <span>从这里分出：{line.label}</span>
+                <span class="tl-branch-mark-hint">{line.count ? `${line.count} 条 · ` : ''}点开去看</span>
+            </span>
+        </button>))}
+    </div>;
+}
+
+/**
+ * Where a line kept by the shell starts, from a message on: a new line, back to the 正文, an existing line, or no
+ * longer a start (following the message before).
+ */
+function MessageLineSheet({ index, lines, busy, waiting, onNew, onPick, onMark, onClose }) {
+    const on = lines.enabled ? lines.lineOf(index) : MAIN_LINE;
+    const starts = lines.enabled && index > 0 && on !== lines.lineOf(index - 1);
+    const others = lines.enabled ? lines.lines.filter(line => line.id !== MAIN_LINE && line.id !== on) : [];
+    return <Sheet title="分线" busy={!!busy && !waiting} onClose={onClose}>
+        <p class="tl-muted tl-sheet-note">从这条起，后面的都跟着它，直到下一个分线的地方。{on && on !== MAIN_LINE ? `现在在「${lines.label(on)}」` : ''}</p>
+        <SheetItem label="从这里开一条番外…" hint="小剧场、平行线也在这里" disabled={!!busy} onClick={onNew} />
+        {on && on !== MAIN_LINE && <SheetItem label="从这里回正文" busy={busy === 'line-main'} busyLabel="正在分…" disabled={!!busy}
+            onClick={() => onMark('line-main', { action: 'mark', line: MAIN_LINE }, '从这条起回到正文')} />}
+        {others.length > 0 && <SheetItem label="划进已有的线…" disabled={!!busy} onClick={onPick} />}
+        {starts && <SheetItem label="这里不分线" hint="跟着上一条" busy={busy === 'line-unmark'} busyLabel="正在改…" disabled={!!busy}
+            onClick={() => onMark('line-unmark', { action: 'unmark' }, '这条起跟着上一条了')} />}
+    </Sheet>;
+}
 
 /** Under the 正文 message a 番外/平行线 left at: one tap opens that line, the 正文 is not touched. */
 function BranchMarks({ lines, onOpen }) {
@@ -412,12 +459,42 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
         if (restored) writeStory(pendingKey, pending || null);
     }, [pending, pendingKey, restored]);
 
+    // The line a queued message goes to (when the story has lines): the one being read when it was written; or what
+    // the message itself asks for when the shell keeps the lines (a new line, back to the 正文).
+    const pendingLine = useRef(null), pendingStep = useRef(null), appliedStep = useRef(false);
+    // A line asked for by the message itself waits for that message: when it is not sent after all, the line is not kept waiting.
+    const undoStep = () => {
+        if (!appliedStep.current) return;
+        appliedStep.current = false;
+        engine.getBridge()?.storylineAction?.('clear-pending', { scope: { avatar: route.avatar, file: chatFile } }).catch(() => {});
+    };
     useEffect(() => {
         const bridge = engine.getBridge();
         if (!bridge || !synced || !pending || eng.generating || sending.current) return;
         sending.current = true;
+        const switchTo = lineSwitch(bridge.storylineState?.(), pendingLine.current);
+        const asked = pendingStep.current;
+        const step = asked ?? (switchTo ? { action: switchTo, line: pendingLine.current } : null);
+        pendingStep.current = null;
+        if (!step) { sendNow(bridge); return; }
+        // The next message goes on the line it is told to (by Horae, or the shell's own record); told first, through the same queue.
+        bridge.storylineAction(step.action, { ...step, scope: { avatar: route.avatar, file: chatFile } })
+            .then(() => {
+                appliedStep.current = !!asked;
+                if (alive.current && pendingRef.current === pending) sendNow(bridge);
+                else { sending.current = false; undoStep(); }
+            }, e => {
+                sending.current = false;
+                if (!alive.current || pendingRef.current !== pending) return;
+                notify(`没切到这条线，没有发出：${e.message}`);
+                setDraft(d => d ? `${pending}\n${d}` : pending);
+                pendingRef.current = null;
+                setPending(null);
+            });
+    }, [synced, pending, eng.generating]);
+    const sendNow = bridge => {
         const job = bridge.send(pending, { scope: { avatar: route.avatar, file: chatFile }, onState: state => {
-            if (state === 'submitted') writeStory(pendingKey, { text: pending, state });
+            if (state === 'submitted') { writeStory(pendingKey, { text: pending, state }); appliedStep.current = false; }
             if (state === 'accepted') writeStory(pendingKey, null);
             if (alive.current) setSendState(state);
         } });
@@ -425,6 +502,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
         job.then(() => { if (alive.current && pendingRef.current === pending) { pendingRef.current = null; setPending(null); } })
             .catch(e => {
                 if (!alive.current || e.code === 'cancelled') return;
+                undoStep();
                 notify(e.message);
                 if (e.code === 'no-connection') go({ name: 'setup', from: 'story' });
                 setDraft(d => d ? `${pending}\n${d}` : pending);
@@ -432,7 +510,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                 setPending(null);
             })
             .finally(() => { if (sendJob.current === job) { sending.current = false; sendJob.current = null; } });
-    }, [synced, pending, eng.generating]);
+    };
 
     // Buttons the full app shows above its input (Quick Replies, Tavern Helper script buttons).
     useEffect(() => {
@@ -471,35 +549,76 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
             .finally(() => setStreamBusy(false));
     };
 
-    const live = synced ? engine.getBridge()?.snapshot(limit) : null;
-    const total = live ? live.total : preview?.length ?? 0;
+    // The 正文 and its lines as a main story and branches: marks where lines leave, a way back from inside one.
+    const branches = useMemo(() => storyBranches(storyList, chatFile, user.handle), [storyList, chatFile, user.handle]);
+    // A line copied from the 正文 starts with that copy; it is shown folded so the line reads as a story of its own.
+    const [copiedOpen, setCopiedOpen] = useState(false);
+    // Horae's lines inside this story, each read as a sub-story: the one chosen here, else the one being written.
+    const [lineChoice, setLineChoice] = useState(null);
+    useEffect(() => { setCopiedOpen(false); setLineChoice(null); }, [chatFile]);
+    const bridgeNow = synced ? engine.getBridge() : null;
+    const storyTotal = bridgeNow ? bridgeNow.storyLength?.() ?? 0 : preview?.length ?? 0;
+    const copiedCount = branches.ownStart !== null && branches.ownStart + 1 <= storyTotal ? branches.ownStart + 1 : 0;
+    const ownFrom = copiedOpen ? 0 : copiedCount;
+    const all = synced ? engine.getBridge()?.readingMessages?.() ?? [] : preview ?? [];
+    // The lines: Horae's when it keeps them, else the shell's own record (also read from the file before the app is ready).
+    const storylineNow = bridgeNow?.storylineState?.() ?? null;
+    const previewOwn = !bridgeNow && preview && !preview.metadata?.horae_storylines && preview.metadata?.tavern_lite_lines ? readRegistry(preview.metadata) : null;
+    // Kinds chosen by hand are kept in the shell's own record also for Horae's lines.
+    const handKinds = (bridgeNow ? storylineNow?.kinds : preview?.metadata ? readRegistry(preview.metadata).kinds : null) ?? {};
+    // A line's kind: chosen by hand, else what the request that started it asked for (小剧场, 平行线), else the record's.
+    const kindOf = (id, first) => handKinds[id] || (all[first]?.is_user ? requestKind(all[first].mes) : null);
+    const ownRegistry = (bridgeNow ? storylineNow?.source === 'lite' && storylineNow.registry : previewOwn?.lines) || {};
+    const nameOf = (id, first) => lineName(ownRegistry[id], all, first);
+    const layoutOf = from => {
+        if (bridgeNow) return lineView({ storyline: storylineNow, total: storyTotal, from, kindOf, nameOf });
+        if (!preview) return { enabled: false };
+        const registry = previewOwn?.lines ?? preview.metadata?.horae_storylines?.lines ?? null;
+        const ids = previewOwn ? ownIds(preview, previewOwn) : idsFromMarks(preview, registry);
+        return lineView({ ids, registry, total: preview.length, from, kindOf, nameOf });
+    };
+    const lines = layoutOf(ownFrom);
+    const view = lines.enabled ? (lineChoice && lines.has(lineChoice) ? lineChoice : lines.writing) : null;
+    // The messages this page shows, when not the whole story: one line's, or the line's own writing after the copy.
+    const pick = view ? lines.indices(view) : ownFrom ? Array.from({ length: storyTotal - ownFrom }, (_, n) => ownFrom + n) : null;
+    const viewLabel = view && view !== MAIN_LINE ? lines.label(view) : '';
+    const live = synced ? bridgeNow?.snapshot(limit, pick) : null;
+    const total = live ? live.total : pick ? pick.length : preview?.length ?? 0;
     // Before the full app is ready: how it showed each message last time, else the display rules it runs.
+    const pickKey = pick ? `${pick.length}:${pick[0]}:${pick.at(-1)}` : '';
     const previewMessages = useMemo(() => {
-        if (!preview) return [];
-        const start = Math.max(0, preview.length - limit), out = [];
+        // Once the app is ready its story is shown (and may have grown past what was read here).
+        if (!preview || synced) return [];
+        const order = pick ?? preview.map((_, i) => i);
+        const out = [];
         let depth = 0;
-        for (let i = preview.length - 1; i >= start; i--) {
-            const m = preview[i];
+        for (let n = order.length - 1; n >= Math.max(0, order.length - limit); n--) {
+            const i = order[n], m = preview[i];
             const html = looks.html[`${i}|${messageMark(m)}`] ?? previewHtml(m.mes, character?.name, user.name,
                 { rules: looks.rules, user: !!m.is_user, depth: m.is_system ? undefined : depth });
             out.push({ ...m, index: i, html });
             if (!m.is_system) depth++;
         }
         return out.reverse();
-    }, [preview, limit, looks, character?.name, user.name]);
+    }, [preview, limit, looks, character?.name, user.name, pickKey, synced]);
     const messages = live ? live.messages : previewMessages;
     const last = messages[messages.length - 1];
-    // Scroll to a message (a 番外 written in the story): load enough of the story, then find it.
-    const jumpToMessage = index => {
+    // Replying, retrying and continuing work on the story's last message: only when this page shows it.
+    const atEnd = !!last && last.index === storyTotal - 1;
+    const openLine = id => {
         setSheet(null);
-        if (total - index > limit) setLimit(total - index + 5);
-        let tries = 0;
-        const seek = () => {
-            const element = list.current?.querySelector(`.tl-message[data-index="${index}"]`);
-            if (element) element.scrollIntoView({ block: 'start' });
-            else if (tries++ < 20) setTimeout(seek, 100);
-        };
-        setTimeout(seek, 150);
+        nearBottom.current = true;
+        setLimit(PAGE);
+        setLineChoice(id);
+    };
+    // Show one message: on its line, unfolding the copy from the 正文 if it is there, then scroll to it.
+    const [seekTo, setSeekTo] = useState(null);
+    const showMessage = index => {
+        setSheet(null);
+        if (index < ownFrom) setCopiedOpen(true);
+        const whole = index < ownFrom ? layoutOf(0) : lines;
+        if (whole.enabled && whole.lineOf(index)) setLineChoice(whole.lineOf(index));
+        setSeekTo(index);
     };
     // Remember how the full app shows this story, for the next visit (look-memory.js).
     const lookMark = live ? `${chatFile}|${live.total}|${last?.index}|${last?.html?.length ?? 0}|${limit}` : '';
@@ -509,16 +628,22 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
             const bridge = engine.getBridge(), current = bridge?.currentChat?.();
             if (!bridge || current?.avatar !== route.avatar || !current?.file) return;
             const rendered = {};
-            for (const m of bridge.snapshot(limit).messages) {
+            for (const m of bridge.snapshot(limit, pick).messages) {
                 if (m.html && !m.html.includes('tl-frontend-card')) rendered[`${m.index}|${messageMark(m)}`] = m.html;
             }
             keepLooks(user.handle, route.avatar, current.file, rendered, bridge.displayRules?.());
         }, 1500);
         return () => clearTimeout(timer);
     }, [lookMark, eng.generating]);
-    const all = synced ? engine.getBridge()?.readingMessages?.() ?? [] : preview ?? [];
-    const reading = useReadingPosition({ list, key: scopedKey('reading', chatFile), all,
-        ready: !!character && (synced || preview !== null), limit, setLimit, nearBottom, notify });
+    // Each line keeps its own place; the 正文 (or a story without lines) keeps the story's.
+    const rank = pick ? index => { const at = pick.indexOf(index); return at < 0 ? null : pick.length - at; } : null;
+    const reading = useReadingPosition({ list, key: scopedKey('reading', chatFile) + (view && view !== MAIN_LINE ? `#${view}` : ''), all,
+        ready: !!character && (synced || preview !== null), limit, setLimit, nearBottom, notify, rank });
+    useEffect(() => {
+        if (seekTo === null) return;
+        setSeekTo(null);
+        reading.seek(seekTo);
+    }, [seekTo]);
     const storyScope = { avatar: route.avatar, file: chatFile };
     useEffect(() => {
         const update = () => {
@@ -539,7 +664,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
         const raw = synced ? engine.getBridge()?.personalConversation?.().messages : preview;
         const found = locateSource(raw || [], source);
         if (!found?.current) return notify('原文已改动或无法定位，摘录仍保留', 'info');
-        reading.seek(found.index);
+        showMessage(found.index);
     }, [chatFile, synced, preview]);
     const captureMessage = (index, kind, text) => {
         if (eng.generating) return notify('生成结束后才能保存一致的快照', 'info');
@@ -603,14 +728,34 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
         if (!event.target.closest('button, a, input, textarea, .tl-swipe')) setHeaderHidden(h => !h);
     };
 
-    const send = ({ here = false, text: chosen } = {}) => {
+    const lineHereKey = scopedKey('line-here', chatFile);
+    // `confirmed`: the author chose to write on a line the shell keeps, knowing the model reads the whole story.
+    const send = ({ here = false, text: chosen, confirmed = false } = {}) => {
         const text = (chosen ?? draft).trim();
         if (!text || pendingRef.current || episodeBusy) return;
-        const status = engine.getBridge()?.episodeStatus?.();
+        const bridge = engine.getBridge();
+        const status = bridge?.episodeStatus?.();
         const intent = !here && status?.enabled && status?.verified && synced ? detectEpisodeIntent(text) : null;
         if (intent) { setSheet({ type: 'episodes', intent }); return; }
+        // Without Horae the shell records the lines itself: from a request that starts one, or goes back to the 正文
+        // (the same rules as Horae's). With Horae, Horae reads the request itself.
+        const state = synced ? bridge?.storylineState?.() : null;
+        const asked = state?.source === 'lite' ? detectEpisodeIntent(text) : null;
+        const directive = state?.source === 'lite' ? lineDirective(text)
+            ?? (asked?.action === 'create' ? { action: 'start', kind: asked.kind, title: asked.title } : null) : null;
+        const from = view ?? state?.active ?? MAIN_LINE;
+        const step = directive?.action === 'start' ? { action: 'new-next', title: directive.title, kind: directive.kind, parent: from, auto: !!directive.weak }
+            : directive?.action === 'back' && from !== MAIN_LINE ? { action: 'to-main' } : null;
+        const target = step?.action === 'new-next' ? 'new' : step ? MAIN_LINE : from;
+        if (state?.source === 'lite' && target !== MAIN_LINE && !confirmed && !readStory(lineHereKey)) {
+            setSheet({ type: 'line-memory', text, step, target,
+                label: target === 'new' ? `${EPISODE_KINDS[step.kind] || '番外'} · ${step.title}` : lines.enabled ? lines.label(target) : '这条线' });
+            return;
+        }
         reading.release();
         nearBottom.current = true;
+        pendingLine.current = step ? null : view;
+        pendingStep.current = step;
         pendingRef.current = text;
         setSendState('pending');
         setPending(text);
@@ -618,11 +763,34 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
         engine.requestEngine('action');
     };
 
+    // A line kept by the shell, copied out into a story of its own (its last stretch, as 故事里写过的番外 does) and opened
+    // there with the words that were about to be sent: its memory is then really apart from the 正文.
+    const splitLine = async (id, text) => {
+        const bridge = engine.getBridge();
+        if (!bridge?.extractEpisode) throw new Error('原版界面还在准备，好了再拆');
+        const at = lines.indices(id);
+        let first = at.length - 1;
+        while (first > 0 && at[first - 1] === at[first] - 1) first--;
+        if (first < 0) throw new Error('这条线还没有内容，没什么可拆');
+        const from = at[first], to = at.at(-1), story = bridge.readingMessages?.() ?? [];
+        const line = lines.lines.find(l => l.id === id);
+        const result = await bridge.extractEpisode({ account: user.handle, scope: storyScope, from, to, title: line?.title || '番外', kind: lines.kind(id),
+            unhide: true, carryVariables: false, expectedFirst: String(story[from]?.mes ?? ''), expectedLast: String(story[to]?.mes ?? '') });
+        if (result?.kind !== 'extracted' || !result.target?.file) throw new Error('没确认新故事写好了，去「番外与平行线」里看看');
+        writeStory(storyKey('draft', user.handle, result.target.avatar ?? route.avatar, result.target.file), text);
+        if (draftValue.current.trim() === text) setDraft('');
+        setSheet(null);
+        notify(`已拆成「${result.title}」，共 ${result.count} 条，在这里接着写`, 'info');
+        go({ name: 'chat', avatar: result.target.avatar ?? route.avatar, file: result.target.file });
+    };
+
     const cancelPending = () => {
         if (!pendingRef.current) return;
         if (sendJob.current && !sendJob.current.cancel?.()) return notify('已经发出，撤不回了', 'info');
         sendJob.current = null;
         sending.current = false;
+        pendingStep.current = null;
+        undoStep();
         const text = pendingRef.current;
         pendingRef.current = null;
         writeStory(pendingKey, null);
@@ -699,16 +867,25 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     const currentChapter = storyList?.find(chapter => api.chatId(chapter.file_name) === chatFile);
     const identity = episodeIdentity(currentChapter?.chat_metadata, user.handle);
     const chapterName = character ? (route.fresh && !synced ? '新故事' : identity.title || chapterLabel(chatFile, character.name, numbers)) : '';
-    const lineLabel = `${identity.type} · ${chapterName}`;
-    // The 正文 and its lines as a main story and branches: marks where lines leave, a way back from inside one.
-    const branches = useMemo(() => storyBranches(storyList, chatFile, user.handle), [storyList, chatFile, user.handle]);
+    // A story lines were opened from (inside it, or as stories of their own) is their 正文, not an "ordinary" story.
+    const storyType = identity.kind === 'ordinary' && (lines.enabled || branches.children?.length > 0) ? '正文' : identity.type;
+    const lineLabel = `${storyType} · ${chapterName}`;
+    // Where the page is: this story, and the line of it being read.
+    const hereLabel = viewLabel ? `${lineLabel} › ${viewLabel}` : lineLabel;
     const forkMarks = useMemo(() => forksByIndex(branches.children), [branches]);
+    const lineMarks = view ? lines.marks(view) : null;
+    // From the 正文 to here: the story a line was copied from (another story), then Horae's lines inside this one.
+    const crumbs = lines.enabled ? lines.path(view).map((step, n, all) => ({
+        key: step.id, label: n === 0 && branches.parent ? lineLabel : step.label,
+        open: n < all.length - 1 && step.readable ? () => openLine(step.id) : null,
+    })) : branches.parent ? [{ key: 'here', label: lineLabel, open: null }] : [];
+    const showPath = !!branches.parent || crumbs.length > 1;
     const openStory = file => go({ name: 'chat', avatar: route.avatar, file });
     // Horae storylines inside this story: the line in use (and the one the next message switches to), for its sheet under ＋.
     const storyline = synced ? live?.storyline ?? null : null;
-    const lastIsChar = !!last && !last.is_user && !last.is_system;
+    const lastIsChar = atEnd && !last.is_user && !last.is_system;
     // After a stopped or failed generation the story ends with the user's words; the app then generates a reply.
-    const lastIsUser = !!last && !!last.is_user && !last.is_system && !pending;
+    const lastIsUser = atEnd && !!last.is_user && !last.is_system && !pending;
     const notReadyHint = synced ? (eng.generating ? '生成完再操作' : '') : '准备好后可用';
     const askReply = () => run(b => b.regenerate({ after: 'user' }), `让${character?.name ?? '角色'}回复`);
     const regenerateReply = () => run(b => b.regenerate({ after: 'char' }), '重新生成');
@@ -733,11 +910,17 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                 <button class="tl-ghost tl-aa" aria-label="阅读设置" onClick={onReading}>Aa</button>
                 <button class="tl-ghost" aria-label="更多" onClick={() => setSheet({ type: 'header' })}><Icon name="more" /></button>
             </header>
-            {branches.parent && (
+            {showPath && (
                 <nav class="tl-branch-path" aria-label="所在位置" data-hidden={headerHidden ? 'true' : undefined}>
-                    <button class="tl-link" onClick={() => openStory(branches.parent.file)}>正文</button>
-                    <span aria-hidden="true">›</span>
-                    <span class="tl-branch-path-here">{lineLabel}</span>
+                    {branches.parent && <>
+                        <button class="tl-link" onClick={() => openStory(branches.parent.file)}>正文</button>
+                        <span aria-hidden="true">›</span>
+                    </>}
+                    {crumbs.map((crumb, n) => <Fragment key={crumb.key}>
+                        {n > 0 && <span aria-hidden="true">›</span>}
+                        {crumb.open ? <button class="tl-link tl-branch-path-step" onClick={crumb.open}>{crumb.label}</button>
+                            : <span class={n === crumbs.length - 1 ? 'tl-branch-path-here' : 'tl-branch-path-step'}>{crumb.label}</span>}
+                    </Fragment>)}
                 </nav>
             )}
             {syncError && <p class="tl-error tl-banner">{syncError} <button class="tl-button" onClick={() => setSyncError('')}>重试</button></p>}
@@ -747,21 +930,33 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                     <button class="tl-button tl-more" onClick={() => { nearBottom.current = false; setLimit(l => l + PAGE); }}>查看更早的 {Math.min(PAGE, total - messages.length)} 条</button>
                 )}
                 {preview === null && !live && <p class="tl-muted">正在加载…</p>}
+                {character && total <= messages.length && ownFrom > 0 && (
+                    <div class="tl-card tl-copied-note">
+                        <p>前面 {ownFrom} 条是开这条线时从正文带过来的，这里只显示这条线自己写的</p>
+                        <div class="tl-row">
+                            {branches.parent && <button class="tl-button" onClick={() => openStory(branches.parent.file)}>去正文看</button>}
+                            <button class="tl-button" onClick={() => { nearBottom.current = false; setCopiedOpen(true); }}>在这里展开</button>
+                        </div>
+                    </div>
+                )}
                 {character && total <= messages.length && (
                     <header class="tl-chapter-opening">
-                        <span class="tl-chapter-kicker">{lineLabel}</span>
+                        <span class="tl-chapter-kicker">{viewLabel || lineLabel}</span>
                         <h2 class="tl-chapter-heading">{character.name}</h2>
                         <span class="tl-ornament" aria-hidden="true" />
                     </header>
                 )}
+                {character && view && !total && <p class="tl-muted tl-line-empty">「{viewLabel || '正文'}」还没有内容，发一句就从这里开始写</p>}
                 {character && messages.map(m => <Fragment key={m.index}>
-                    <Message message={m} character={character} user={user} display={live?.display} isLast={m === last && !pending}
+                    <Message message={m} character={character} user={user} display={live?.display} isLast={m === last && atEnd && !pending}
                         synced={synced} generating={eng.generating} waitingSince={generatingSince.current} swiping={swiping && m === last}
                         onMenu={message => setSheet({ type: 'message', message })}
                         onSwipe={swipe}
                         onContinue={() => run(b => b.continueReply(), '接着写')} onReply={askReply} onRegenerate={regenerateTap} onShowInNative={onShowInNative} />
+                    {lineMarks?.has(m.index) && <LineMarks lines={lineMarks.get(m.index)} onOpen={openLine} />}
                     {forkMarks.has(m.index) && <BranchMarks lines={forkMarks.get(m.index)} onOpen={openStory} />}
-                    {branches.ownStart === m.index && <p class="tl-branch-divider" role="separator">以上来自正文 · 从这里起是这条线</p>}
+                    {copiedOpen && branches.ownStart === m.index && <p class="tl-branch-divider" role="separator">以上来自正文 · 从这里起是这条线
+                        <button class="tl-link" onClick={() => { nearBottom.current = true; setCopiedOpen(false); }}>收起</button></p>}
                 </Fragment>)}
                 {/* The app adds the reply only once the model service answers (a minute or more with some relays). */}
                 {character && synced && eng.generating && lastIsUser && (
@@ -809,7 +1004,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                 </div>
             )}
             <div class="tl-episode-bar" data-quick={synced ? 'true' : undefined}>
-                <span>发送到：{lineLabel}</span>
+                <span>发送到：{hereLabel}</span>
                 <button class="tl-button" aria-disabled={!synced || !!pending || eng.generating || episodeBusy ? 'true' : undefined} onClick={() => {
                     // Not greyed out without a word: a tap says what it waits for.
                     const wait = eng.generating ? '正在写回复，写完再打开' : pending ? '有一句还在排队发送，发出去再打开' : episodeBusy ? '番外正在发送，等它写完'
@@ -843,7 +1038,8 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
             {sheet?.type === 'actions' && (
                 <Sheet title="扩展功能" onClose={() => setSheet(null)}>
                     <p class="tl-muted tl-sheet-note">扩展提供的功能（原版 ✨ 菜单）</p>
-                    {storyline?.multi && <SheetItem label="Horae 故事线" hint={`现在在「${storyline.label}」${storyline.pending ? `，下一句起换到「${storyline.pendingLabel}」` : ''}`}
+                    {storyline?.multi && <SheetItem label={storyline.source === 'horae' ? 'Horae 故事线' : '故事里的线'}
+                        hint={view ? `正在读「${viewLabel || '正文'}」` : `现在在「${lines.enabled ? lines.label(lines.writing) : '正文'}」`}
                         onClick={() => setSheet({ type: 'storylines' })} />}
                     {extensionItems.map(item => (
                         <SheetItem key={item.key} label={item.label} onClick={() => {
@@ -858,6 +1054,8 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                     <p class="tl-sheet-section">这个故事</p>
                     <p class="tl-muted tl-sheet-note">{lineLabel}</p>
                     <SheetItem label="目录" hint="跳到任意一段" onClick={openToc} />
+                    {storyline && storyline.source !== 'horae' && <SheetItem label="故事里的线" hint={lines.enabled ? `正文和 ${lines.lines.length - 1} 条番外，分开显示` : '故事里写的番外分开显示'}
+                        onClick={() => setSheet({ type: 'storylines' })} />}
                     <SheetItem label="我的摘录" hint="收藏的句子和备注" onClick={() => setSheet({ type: 'personal' })} />
                     <SheetItem label="分享这个故事" hint={synced ? '长图、文本或复制' : '准备好后可用'} disabled={!synced}
                         onClick={() => setSheet({ type: 'export', from: 0 })} />
@@ -947,7 +1145,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
             )}
             {sheet?.type === 'toc' && (
                 <TocSheet storyTitle={lineLabel} messages={sheet.story} currentIndex={sheet.current} onClose={() => setSheet(null)}
-                    onJump={index => { setSheet(null); reading.seek(index); }} />
+                    onJump={showMessage} />
             )}
             {sheet?.type === 'chapters' && character && (
                 <ChaptersSheet character={character} account={user.handle} currentFile={chatFile} onClose={() => setSheet(null)}
@@ -972,6 +1170,10 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                     <SheetItem label="换个走向" hint={notReadyHint || '从这里另开一个故事'}
                         busy={sheetBusy === 'branch'} busyLabel="正在另开一个故事…"
                         disabled={!ready || !engine.getBridge()?.capabilities.branch} onClick={() => runHere('branch', b => b.branchFrom(sheet.message.index).then(openChat))} />
+                    {storyline && storyline.source !== 'horae' && sheet.message.index > 0 && sheet.message.index >= ownFrom && (
+                        <SheetItem label="分线" hint={notReadyHint || '从这条起开番外，或回到正文'} disabled={!ready}
+                            onClick={() => setSheet({ type: 'message-line', message: sheet.message })} />
+                    )}
                     <SheetItem label="更多" hint="选择文字、分享等" onClick={() => setSheet({ type: 'message-more', message: sheet.message })} />
                     <SheetItem label="删除" hint={notReadyHint || undefined} danger
                         disabled={!ready || sheet.message.index === undefined || !engine.getBridge()?.capabilities.deleteMessage}
@@ -997,11 +1199,46 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
             {sheet?.type === 'capture' && <CaptureSheet user={user} {...sheet} onClose={() => setSheet(null)} onSaved={record => {
                 recentUndo.current = null; setRecent(record); setSheet(null); getSelection()?.removeAllRanges();
             }} />}
-            {sheet?.type === 'storylines' && <StorylineSheet initial={storyline} notify={notify} onClose={() => setSheet(null)} />}
+            {sheet?.type === 'storylines' && <StorylineSheet initial={storyline} lines={lines} view={view} onOpen={openLine}
+                onEdit={line => setSheet({ type: 'line-edit', line })} notify={notify} scope={storyScope} onClose={() => setSheet(null)} />}
+            {sheet?.type === 'line-edit' && <LineFormSheet title={`改「${sheet.line.label}」`} line={sheet.line} named={storyline?.source !== 'horae'}
+                confirmLabel="保存" onClose={() => setSheet({ type: 'storylines' })} onSave={async ({ kind, title }) => {
+                    const b = engine.getBridge();
+                    if (!b) throw new Error('原版界面还在准备，好了再改');
+                    if (kind !== sheet.line.kind) await b.storylineAction('set-kind', { line: sheet.line.id, kind, scope: storyScope });
+                    if (storyline?.source !== 'horae' && title !== sheet.line.title) await b.storylineAction('rename', { line: sheet.line.id, title, scope: storyScope });
+                    notify('已改好', 'info');
+                }} />}
+            {sheet?.type === 'message-line' && <MessageLineSheet index={sheet.message.index} lines={lines} busy={sheetBusy} waiting={sheetWaiting}
+                onNew={() => setSheet({ type: 'line-new', message: sheet.message })} onPick={() => setSheet({ type: 'line-pick', message: sheet.message })}
+                onMark={(busy, options, done) => runHere(busy, b => b.storylineAction(options.action, { ...options, index: sheet.message.index, scope: storyScope })
+                    .then(() => notify(done, 'info')))} onClose={closeSheet} />}
+            {sheet?.type === 'line-pick' && (
+                <Sheet title="划进已有的线" busy={!!sheetBusy && !sheetWaiting} onClose={closeSheet}>
+                    <p class="tl-muted tl-sheet-note">从这条起，后面的都跟着它，直到下一个分线的地方</p>
+                    {lines.enabled && lines.lines.filter(line => line.id !== MAIN_LINE && line.id !== lines.lineOf(sheet.message.index)).map(line => (
+                        <SheetItem key={line.id} label={line.label} busy={sheetBusy === `line-${line.id}`} busyLabel="正在分…" disabled={!!sheetBusy}
+                            onClick={() => runHere(`line-${line.id}`, b => b.storylineAction('mark', { index: sheet.message.index, line: line.id, scope: storyScope })
+                                .then(() => notify(`从这条起是「${line.label}」`, 'info')))} />))}
+                </Sheet>
+            )}
+            {sheet?.type === 'line-new' && <LineFormSheet title="从这里开一条番外" confirmLabel="开始" onClose={() => setSheet(null)}
+                onSave={({ kind, title }) => engine.whenBridge().then(b => b.storylineAction('mark', { index: sheet.message.index, title, kind, scope: storyScope }))
+                    .then(() => notify(`从这条起是${EPISODE_KINDS[kind]}「${title}」`, 'info'))} />}
+            {sheet?.type === 'line-memory' && (() => {
+                const bridge = engine.getBridge(), status = bridge?.episodeStatus?.();
+                const isNew = sheet.target === 'new';
+                const canSplit = !!status?.enabled && (isNew ? !!status.verified : !!(status.extractable ?? status.verified) && !!bridge?.extractEpisode);
+                return <LineMemorySheet label={sheet.label} isNew={isNew} canSplit={canSplit} onClose={() => setSheet(null)}
+                    onHere={() => { writeStory(lineHereKey, true); setSheet(null); send({ here: true, text: sheet.text, confirmed: true }); }}
+                    onSplit={() => isNew
+                        ? setSheet({ type: 'episodes', intent: { action: 'create', kind: sheet.step.kind, title: sheet.step.title, text: sheet.text, contextMode: 'continued', historical: false } })
+                        : splitLine(sheet.target, sheet.text)} />;
+            })()}
             {sheet?.type === 'episodes' && <EpisodesSheet account={user.handle} scope={storyScope} characterName={character?.name}
                 currentTitle={lineLabel} draft={draft} draftRevision={draftRevision.current} initialIntent={sheet.intent}
                 currentRequest={[...all].reverse().find(message => message.is_user && !message.is_system)?.mes || ''}
-                onBusyChange={setEpisodeBusy} notify={notify} onJump={jumpToMessage}
+                onBusyChange={setEpisodeBusy} notify={notify} onJump={showMessage}
                 // A line made or renamed here shows as a mark in the 正文 at once: the story list is read again.
                 onClose={() => { setSheet(null); reloadNumbers(); }}
                 onSendHere={text => { setSheet(null); send({ here: true, text }); }}
@@ -1025,7 +1262,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                         const raw = synced ? engine.getBridge()?.personalConversation?.().messages : preview;
                         const found = locateSource(raw || [], requested);
                         if (!found?.current) throw new Error('原文已改动或无法定位');
-                        reading.seek(found.index);
+                        showMessage(found.index);
                     } else go({ name: 'chat', avatar: source.avatar, file: source.file });
                 }} />}
             {sheet?.type === 'delete' && (sheet.message.swipes > 1

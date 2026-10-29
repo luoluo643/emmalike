@@ -76,8 +76,16 @@ try {
     const path = page.locator('.tl-branch-path');
     await path.waitFor();
     check('inside the line a path leads back to the 正文', (await path.innerText()).includes('正文') && (await path.innerText()).includes(TITLE), await path.innerText());
+    // The copy of the 正文 is folded: the line reads as its own story, the copy one tap away.
+    const note = page.locator('.tl-copied-note');
+    await note.waitFor({ timeout: 30000 }).catch(() => { });
+    const firstShown = await page.locator('.tl-messages .tl-message[data-index]').first().getAttribute('data-index').catch(() => null);
+    check('the copied 正文 is folded', await note.isVisible() && (await note.innerText()).includes(`前面 ${Number(lastIndex) + 1} 条`)
+        && (firstShown === null || Number(firstShown) > Number(lastIndex)), `${firstShown} vs ${lastIndex}`);
+    await note.getByRole('button', { name: '在这里展开', exact: true }).click();
+    await page.locator('.tl-branch-divider').waitFor({ timeout: 30000 }).catch(() => { });
     const dividerAfter = await page.locator('.tl-branch-divider').evaluate(el => el.previousElementSibling?.dataset.index ?? null).catch(() => null);
-    check('a divider marks where the copied 正文 ends', dividerAfter === lastIndex, `${dividerAfter} vs ${lastIndex}`);
+    check('unfolded, a divider marks where the copied 正文 ends', dividerAfter === lastIndex, `${dividerAfter} vs ${lastIndex}`);
     await page.screenshot({ path: '/tmp/tl-branches-line.png' });
 
     // The sheet as a tree from inside the line.
