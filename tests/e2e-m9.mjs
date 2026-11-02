@@ -149,6 +149,8 @@ await banner.click();
 await page.locator('.tl-setup').waitFor({ timeout: 15000 });
 await noJargon('开始使用');
 await page.getByRole('radio', { name: /^中转站（OpenAI 格式）/ }).click();
+// Choosing a service moves focus to its first field on the next frame; typing before that lands the key in 地址.
+await page.waitForFunction(() => document.activeElement?.id === 'tl-setup-url');
 // First an address nobody answers: the page must not call it connected (the app reports any relay as "check
 // bypassed", and its status still says the previous service was fine).
 await page.getByRole('textbox', { name: '地址' }).fill('http://127.0.0.1:5999/v1');

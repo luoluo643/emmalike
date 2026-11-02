@@ -210,6 +210,9 @@ try {
         el.dispatchEvent(new Event('change')); await new Promise(r => setTimeout(r, 500));
     }, initialPreset);
     await page.getByRole('button', { name: '返回轻酒馆', exact: true }).click();
+    // The app loads the chosen preset after the change event: give the save bar time to follow.
+    await page.waitForFunction(([shown, old]) => { const t = document.querySelector('.tl-preset-savebar')?.textContent ?? ''; return t.includes(shown) && !t.includes(old); },
+        [initialPreset === 'Default' ? '默认' : initialPreset, preset], { timeout: 15000 }).catch(() => {});
     check('原版切换预设后保存栏同步更新', (await page.locator('.tl-preset-savebar').innerText()).includes(initialPreset === 'Default' ? '默认' : initialPreset)
         && !(await page.locator('.tl-preset-savebar').innerText()).includes(preset));
     check('没有浏览器运行错误', errors.length === 0);

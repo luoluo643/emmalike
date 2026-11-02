@@ -26,6 +26,15 @@ assert.ok((await post('/api/users/create', { handle: bUser, name: '隐私测试B
 const app = base + '/scripts/extensions/third-party/emmalike/app/';
 // Account-switch checks require a new document; hash-only goto can be rejected by the old frozen bridge.
 const navigate = async target => { await page.goto('about:blank'); return page.goto(target); };
+// The app may be finishing a navigation of its own when the test reloads: try again once it settles.
+const reload = async () => {
+    for (let i = 0; ; i++) {
+        try { return await page.reload({ waitUntil: 'domcontentloaded' }); } catch (error) {
+            if (i === 2 || !/ERR_ABORTED|interrupted by another navigation|frame was detached/.test(error.message)) throw error;
+            await page.waitForTimeout(1000);
+        }
+    }
+};
 const avatar = 'default_Seraphina.png', file = 'personal-' + Date.now();
 let createdGroup;
 await fs.writeFile(output + '/fixtures.json', JSON.stringify({ bUser, avatar, file }));
@@ -95,7 +104,7 @@ try {
     await page.locator('.tl-personal-notice').filter({ hasText: '已存下这一版' }).waitFor();
     // Fixture changes the adopted candidate explicitly; the comparison feature must never do so.
     chat[13].mes = versionB; chat[13].swipe_id = 1; await saveChat();
-    await page.reload({ waitUntil: 'domcontentloaded' }); await synced(); await page.waitForTimeout(1000);
+    await reload(); await synced(); await page.waitForTimeout(1000);
     await page.locator('.tl-composer-input').fill('比较期间保留的草稿');
     const beforeServer = await readChat(), beforeMemory = await native(w => JSON.stringify(w.SillyTavern.getContext().chat));
     const beforeGenerations = generationRequests;
@@ -147,7 +156,7 @@ try {
     await login(bUser); readGate.release();
     await page.waitForTimeout(500); await page.unroute(heldPath);
     check('切账号后拒收旧账号的异步读取结果', !(await page.locator('body').innerText()).includes(note));
-    await navigate(app + '#me'); await page.reload({ waitUntil: 'domcontentloaded' });
+    await navigate(app + '#me'); await reload();
     await page.getByRole('button', { name: /^我的摘录/ }).click(); await page.getByText(/还没有摘录/).waitFor();
     check('同浏览器B看不到A的摘录', await records().count() === 0);
     if (mode === 'account') {
@@ -156,7 +165,7 @@ try {
         const forgedWrite = await post('/api/plugins/tavern-lite/records/write', { account: bUser, id: quoteId, expected: 1, operationId: crypto.randomUUID(), action: 'note', note: 'attack' });
         check('篡改记录ID不能修改另一个账号', [404, 409].includes(forgedWrite.status()));
     }
-    await login('default-user'); await navigate(url); await page.reload({ waitUntil: 'domcontentloaded' }); await synced(); await openRecords();
+    await login('default-user'); await navigate(url); await reload(); await synced(); await openRecords();
     await quoted.waitFor(); check('切回A原记录与备注仍在', (await quoted.innerText()).includes(note));
     await close();
     await page.locator('.tl-composer-input').fill('A_ONLY_DRAFT_' + note);
@@ -169,7 +178,7 @@ try {
     while (!saveEntered) await page.waitForTimeout(30);
     await login(bUser); saveGate.release(); await page.waitForTimeout(500); await page.unroute(savePath);
     check('切账号后迟到的保存结果不会显示给B', !(await page.locator('body').innerText()).includes('已收藏'));
-    await navigate(url); await page.reload({ waitUntil: 'domcontentloaded' }); await page.locator('.tl-composer-input').waitFor();
+    await navigate(url); await reload(); await page.locator('.tl-composer-input').waitFor();
     check('同浏览器B没有A的输入草稿', !(await page.locator('.tl-composer-input').inputValue()).includes('A_ONLY_DRAFT'));
     const freshB = await browser.newContext();
     const freshToken = (await (await freshB.request.get(base + '/csrf-token')).json()).token;
@@ -177,18 +186,18 @@ try {
     const freshPage = await freshB.newPage(); await freshPage.goto(app + '#me');
     await freshPage.getByRole('button', { name: /^我的摘录/ }).click(); await freshPage.getByText(/还没有摘录/).waitFor();
     check('全新浏览器中B也没有A的个人记录', await freshPage.locator('[data-record-id]').count() === 0); await freshB.close();
-    await login('default-user'); await navigate(url); await page.reload({ waitUntil: 'domcontentloaded' }); await synced();
+    await login('default-user'); await navigate(url); await reload(); await synced();
     check('切回A后其输入草稿仍保留', (await page.locator('.tl-composer-input').inputValue()).includes('A_ONLY_DRAFT'));
     // Removing the source story must not remove either private snapshot.
     await native((w, a) => w.TavernLiteBridge.deleteChapter(a.avatar, a.file), { avatar, file });
-    await navigate(app + '#me'); await page.reload({ waitUntil: 'domcontentloaded' }); await page.getByRole('button', { name: /^我的摘录/ }).click();
+    await navigate(app + '#me'); await reload(); await page.getByRole('button', { name: /^我的摘录/ }).click();
     await quoted.waitFor(); await page.waitForFunction(id => document.querySelector(`[data-record-id="${id}"]`)?.textContent.includes('原文已改动或无法定位'), quoteId);
     check('源故事删除后快照和备注仍完整可读并标示失效', (await quoted.innerText()).includes(note) && await page.locator(`[data-record-id="${markId}"]`).count() === 1);
     await page.screenshot({ path: output + '/records-source-deleted.png' });
     await close();
     const group = await (await post('/api/groups/create', { name: '摘录群聊' + Date.now(), members: [avatar], avatar_url: 'img/ai4.png' })).json();
     createdGroup = group; await fs.writeFile(output + '/fixtures.json', JSON.stringify({ bUser, avatar, file, group: { id: group.id, chat_id: group.chat_id, chats: group.chats } }));
-    await page.reload({ waitUntil: 'domcontentloaded' });
+    await reload();
     await page.waitForFunction(() => !!document.querySelector('iframe.engine')?.contentWindow?.TavernLiteBridge, null, { timeout: 240000 });
     await native((w, id) => w.TavernLiteBridge.openGroup(id), group.id);
     await page.getByRole('button', { name: /^我的摘录/ }).click();
