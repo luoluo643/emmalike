@@ -31,11 +31,12 @@ if (!(await post('/api/users/login', { handle, password })).ok()) throw new Erro
 const discover = async () => (await (await page.request.get(`${base}/api/extensions/discover`)).json()).map(x => x.name);
 const helperFolder = 'JS-Slash-Runner';
 const helperWasThere = (await discover()).some(n => n.endsWith(`/${helperFolder}`));
-const gotoMe = async () => {
-    // The app may still be finishing a navigation of its own (a reload it asked for): try again once it settles.
+const gotoMe = async (fresh = false) => {
+    // The app may still be finishing a navigation of its own (a reload it asked for, or the history step back that
+    // closing a sheet takes): try again once it settles. fresh starts from a new document.
     for (let i = 0; ; i++) {
-        try { await page.goto(appUrl + '#me'); break; } catch (error) {
-            if (i === 2 || !/interrupted by another navigation/.test(error.message)) throw error;
+        try { if (fresh) await page.goto('about:blank'); await page.goto(appUrl + '#me'); break; } catch (error) {
+            if (i === 2 || !/interrupted by another navigation|ERR_ABORTED/.test(error.message)) throw error;
             await page.waitForTimeout(1000);
         }
     }
@@ -98,12 +99,12 @@ try {
 
     // The daily check: told once per version, then quiet.
     await page.evaluate(() => { localStorage.removeItem('tavern-lite:update-checked'); localStorage.removeItem('tavern-lite:update-notified'); });
-    await page.goto('about:blank'); await gotoMe();
+    await gotoMe(true);
     // The daily check starts 20 seconds after the page opens.
     await page.waitForFunction(() => window.__tlToasts.some(t => t.includes('有新版本')), null, { timeout: 60000 }).catch(() => { });
     check('daily check: says a new version is there', await page.evaluate(() => window.__tlToasts.some(t => t.includes('9.9.9') && t.includes('检查更新'))), JSON.stringify(await page.evaluate(() => window.__tlToasts)));
     await page.evaluate(() => localStorage.removeItem('tavern-lite:update-checked'));
-    await page.goto('about:blank'); await gotoMe();
+    await gotoMe(true);
     await page.getByRole('button', { name: /^检查更新/ }).waitFor({ timeout: 60000 });
     await page.waitForTimeout(30000);
     check('daily check: the same version is not said twice', !(await page.evaluate(() => window.__tlToasts.some(t => t.includes('有新版本')))), JSON.stringify(await page.evaluate(() => window.__tlToasts)));

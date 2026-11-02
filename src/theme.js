@@ -337,14 +337,29 @@ ${capsuleCss('background: rgba(255, 255, 255, 0.55); backdrop-filter: blur(10px)
 
 };
 
+// Pictures behind the illustrated themes, from the extension's skins/ folder. Each is veiled in the theme's own colour
+// so text stays readable; the last layer takes the page's "center / cover no-repeat".
+// The folder is wherever this extension was installed (app/ sits next to skins/). Resolved here: a relative url()
+// in a custom property would be read against whichever stylesheet uses it.
+const SKINS = (() => { try { return new URL('../skins/', document.baseURI).href; } catch { return '../skins/'; } })();
+const SKIN = name => `url("${SKINS}${name}.webp")`;
 const veil = (color, top, bottom = top) => `linear-gradient(180deg, rgba(${color}, ${top}), rgba(${color}, ${bottom}))`;
 /** Orbits, a constellation and one trail, drawn faint: the sky behind 星轨, the way event pages layer line art on dark. */
 const STARCHART = svg(`width='640' height='640' viewBox='0 0 640 640' fill='none'><defs><linearGradient id='t' x1='0' y1='1' x2='1' y2='0'><stop offset='0' stop-color='#e8c27a' stop-opacity='0'/><stop offset='1' stop-color='#f6dca6' stop-opacity='.3'/></linearGradient></defs><g stroke='#e8c27a' stroke-opacity='.09'><circle cx='420' cy='220' r='110'/><circle cx='420' cy='220' r='180' stroke-dasharray='2 6'/><circle cx='420' cy='220' r='260'/><circle cx='420' cy='220' r='350' stroke-opacity='.08'/></g><path d='M110 480 L310 330' stroke='url(#t)' stroke-width='1.4' stroke-linecap='round'/><path d='M150 140 L232 112 L300 170 L268 252 L190 236' stroke='#ffffff' stroke-opacity='.09'/><g fill='#ffffff'><circle cx='150' cy='140' r='2' fill-opacity='.7'/><circle cx='232' cy='112' r='1.6' fill-opacity='.6'/><circle cx='300' cy='170' r='2.2' fill-opacity='.8'/><circle cx='268' cy='252' r='1.6' fill-opacity='.6'/><circle cx='190' cy='236' r='1.4' fill-opacity='.5'/><circle cx='520' cy='420' r='1.2' fill-opacity='.4'/><circle cx='70' cy='320' r='1' fill-opacity='.4'/><circle cx='580' cy='90' r='1.4' fill-opacity='.5'/><circle cx='380' cy='520' r='1' fill-opacity='.35'/></g><circle cx='420' cy='220' r='3' fill='#f6dca6' fill-opacity='.7'/>`);
 const ART = {
     star: `:root { --tl-bg-image: ${STARCHART} right -140px top -110px / 640px no-repeat, radial-gradient(70vmax 50vmax at 85% 8%, rgba(126, 116, 196, 0.2), transparent 70%), radial-gradient(60vmax 40vmax at 0% 100%, rgba(232, 194, 122, 0.08), transparent 70%), repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 9px), linear-gradient(180deg, #0c0e22, #141634 60%, #0f1028); --tl-bg-size: cover; }`,
+    gilt: `:root { --tl-bg-image: ${veil('239, 232, 218', 0.5)}, ${SKIN('gilt')}; --tl-bg-size: cover; }`,
+    echo: `:root { --tl-bg-image: ${veil('14, 16, 18', 0.5, 0.72)}, ${SKIN('echo')}; --tl-bg-size: cover; }`,
+    // The fade and the multiply are baked into the picture (black, alpha = fade × darkness): iPhone ignored the mask here.
+    // Where the screen is wide enough that cover crops the picture's top, a mask fades the cut edge instead.
+    mountain: `:root { --tl-bg-image: linear-gradient(180deg, #f2f4f1, #e6ebe7); --tl-bg-size: cover; }
+body::after { content: ""; position: fixed; left: 0; right: 0; bottom: 0; z-index: -1; height: min(56vw, 62vh); pointer-events: none; background: ${SKIN('mountain-fade')} center bottom / cover no-repeat; }
+@media (min-aspect-ratio: 10/9) { body::after { -webkit-mask-image: linear-gradient(180deg, transparent, #000 45%); mask-image: linear-gradient(180deg, transparent, #000 45%); } }`,
+    wisteria: `:root { --tl-bg-image: ${SKIN('wisteria')} center top / min(100%, 720px) auto no-repeat, radial-gradient(60vmax 40vmax at 0% 0%, rgba(155, 135, 217, 0.12), transparent 70%), radial-gradient(50vmax 40vmax at 100% 100%, rgba(163, 196, 106, 0.14), transparent 70%); --tl-bg-size: cover; }`,
 };
 
 // Built-in themes. Only the five main colours are chosen by hand; everything else is derived (see themeVars).
+// The illustrated ones also carry their own CSS, written against the selectors THEMING.md promises.
 export const PRESETS = {
     system: { name: '跟随系统' },
     paper: { name: '纸色', bg: '#f5efe3', text: '#2b2620', accent: '#8b5e34', quote: '#7a4a1e', em: '#6f6558' },
@@ -355,6 +370,10 @@ export const PRESETS = {
     night: { name: '夜间', bg: '#171513', text: '#d9d2c5', accent: '#d0a676', quote: '#e3b98a', em: '#aca291' },
     ink: { name: '墨蓝', bg: '#18202b', text: '#cfd6df', accent: '#86aed6', quote: '#a9c8e6', em: '#97a3b1' },
     star: { name: '星轨', bg: '#0d0f24', text: '#f1f2f7', accent: '#e8c27a', quote: '#f6dca6', em: '#b6b9d3', css: starCss() + '\n' + LAYOUTS.star + '\n' + PLAIN_CLOSE + '\n' + PENDING + '\n' + ART.star },
+    gilt: { name: '金纹', bg: '#efe8da', text: '#3b4255', accent: '#8a6532', quote: '#2f5f86', em: '#6b6152', css: giltCss() + '\n' + LAYOUTS.gilt + '\n' + PLAIN_CLOSE + '\n' + PENDING + '\n' + ART.gilt },
+    echo: { name: '回声', bg: '#0e1012', text: '#e9eaea', accent: '#f0d68a', quote: '#f5e3ad', em: '#9aa0a4', css: echoCss() + '\n' + LAYOUTS.echo + '\n' + PLAIN_CLOSE + '\n' + PENDING + '\n' + ART.echo },
+    mountain: { name: '远山', bg: '#eaeeea', text: '#2c3330', accent: '#4f6b5f', quote: '#3d5a50', em: '#5c6862', font: 'serif', css: mountainCss() + '\n' + LAYOUTS.mountain + '\n' + PLAIN_CLOSE + '\n' + PENDING + '\n' + ART.mountain },
+    wisteria: { name: '紫藤', bg: '#fcfbfe', text: '#2e2b3a', accent: '#5d8a2a', quote: '#46701a', em: '#6750a4', css: wisteriaCss() + '\n' + LAYOUTS.wisteria + '\n' + PLAIN_CLOSE + '\n' + PENDING + '\n' + ART.wisteria },
 };
 
 export const LINE_HEIGHTS = { compact: { label: '紧凑', value: 1.6 }, normal: { label: '标准', value: 1.85 }, loose: { label: '宽松', value: 2.1 } };
