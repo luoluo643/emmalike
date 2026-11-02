@@ -456,18 +456,46 @@ export function EngineWait({ when = '好了这里会自动出现' }) {
     return <EngineStatus eng={eng} meanwhile={when} />;
 }
 
+// A load this long is slow enough for the reader to wonder why.
+const SLOW_LOAD_MS = 15000;
+
+/** The usual reasons the full app is slow to load (or did not load), opened from the status line itself. */
+function SlowReasons({ mode, failed }) {
+    return (
+        <div class="tl-engine-why">
+            <ul>
+                <li>网络慢或不稳：换网、开着代理、信号差时最容易卡住</li>
+                <li>扩展多：原版要把酒馆里装的扩展全部加载一遍，可以在「我的 → 加载的扩展（仅本机）」让本机跳过用不上的</li>
+                {mode !== 'auto' && engine.ENGINE_MODES[mode] && <li>加载时机是「{engine.ENGINE_MODES[mode].label}」：用到时才开始加载</li>}
+                <li>酒馆装在手机上（比如 Termux）：切到别的应用后可能被系统暂停</li>
+                <li>酒馆所在的服务器忙，或前面的转发超时</li>
+            </ul>
+            <p>{failed ? '可以点「重试」，或刷新页面' : '可以继续等，或刷新页面重来'}</p>
+        </div>
+    );
+}
+
 export function EngineStatus({ eng, meanwhile = '可以先看、先写' }) {
     const [, setNow] = useState(0);
+    const [why, setWhy] = useState(false);
     useEffect(() => {
         if (eng.state !== 'loading') return;
         const timer = setInterval(() => setNow(n => n + 1), 1000);
         return () => clearInterval(timer);
     }, [eng.state]);
+    const whyButton = label => (
+        <button class="tl-button" aria-expanded={why ? 'true' : 'false'} onClick={() => setWhy(open => !open)}>{label}</button>
+    );
     if (eng.state === 'failed') {
+        // Signed out has one answer (the login page is already shown); only load failures get the reasons.
+        const failure = engine.engineFailure();
+        const reasons = failure !== engine.LOGIN_FAILURE;
         return (
-            <div class="tl-engine-status" data-state="failed" role="status">
-                <span>{engine.engineFailure() || '没能准备好'}</span>
+            <div class="tl-engine-status" data-state="failed" data-open={reasons && why ? 'true' : undefined} role="status">
+                <span>{failure || '没能准备好'}</span>
+                {reasons && whyButton('可能原因')}
                 <button class="tl-button" onClick={engine.startEngine}>重试</button>
+                {reasons && why && <SlowReasons mode={eng.mode} failed />}
             </div>
         );
     }
@@ -485,9 +513,12 @@ export function EngineStatus({ eng, meanwhile = '可以先看、先写' }) {
     const progress = engine.engineProgress();
     const { loadingMs, expectedMs } = progress;
     const ratio = expectedMs > 0 ? Math.min(0.95, loadingMs / expectedMs) : Math.min(0.9, loadingMs / 60000);
+    const slow = progress.elapsedMs >= SLOW_LOAD_MS;
     return (
-        <div class="tl-engine-status" data-state="loading" role="status">
+        <div class="tl-engine-status" data-state="loading" data-open={slow && why ? 'true' : undefined} role="status">
             <span>{engine.loadingText(progress)} · {meanwhile}</span>
+            {slow && whyButton('为什么慢')}
+            {slow && why && <SlowReasons mode={eng.mode} />}
             <span class="tl-engine-progress" style={{ '--tl-progress': ratio }} />
         </div>
     );

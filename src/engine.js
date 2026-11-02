@@ -6,6 +6,9 @@ const BRIDGE_TIMEOUT_MS = 20000;
 // network failure the load gets this long to finish anyway before the reader is told and offered a retry.
 const NETWORK_GRACE_MS = 15000;
 export const NETWORK_FAILURE = '网络断了，没加载完';
+// Signed out (expired, or logged out elsewhere): the server answers the full app's page with its login page, which never
+// gets ready. Said at once instead of after the 4 minute limit.
+export const LOGIN_FAILURE = '登录过期了，请重新登录';
 const BRIDGE_URL = new URL('../bridge.js', location.href).href;
 // The official releases the browser tests pass on; another version still works but shows 未在此版本验证.
 export const TESTED_VERSIONS = ['1.16.0', '1.17.0', '1.18.0', '1.19.0'];
@@ -644,6 +647,10 @@ function watchLoadNetwork(win) {
     } catch { /* the page is between documents */ }
 }
 
+function onLoginPage() {
+    try { return /\/login\/?$/.test(nativeWindow()?.location?.pathname ?? ''); } catch { return false; }
+}
+
 function noteNetworkTrouble() {
     if (state === 'loading' && !networkTroubleAt) networkTroubleAt = Date.now();
 }
@@ -667,6 +674,11 @@ function tick() {
         removeReadyListener(run);
         run.listening = binding;
         binding.emitter.on(binding.eventName, run.listener);
+    }
+    if (state === 'loading' && onLoginPage()) {
+        setState('failed', LOGIN_FAILURE);
+        emit('account-changed');
+        return;
     }
     if (state === 'loading' && networkTroubleAt && Date.now() - networkTroubleAt > NETWORK_GRACE_MS) {
         setState('failed', NETWORK_FAILURE);

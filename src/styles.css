@@ -1292,6 +1292,28 @@
         color: var(--tl-danger);
     }
 
+    /* The reasons open inside the same line, which grows into a card. */
+    .tl-engine-status[data-open="true"] {
+        flex-wrap: wrap;
+        border-radius: 16px;
+        padding-bottom: 10px;
+    }
+
+    .tl-engine-why {
+        flex-basis: 100%;
+        color: var(--tl-text-muted);
+        line-height: 1.6;
+    }
+
+    .tl-engine-why ul {
+        margin: 2px 0 6px;
+        padding-left: 1.2em;
+    }
+
+    .tl-engine-why p {
+        margin: 0;
+    }
+
     .tl-engine-progress {
         position: absolute;
         left: 0;

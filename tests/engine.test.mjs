@@ -229,6 +229,18 @@ test('no native ready event still fails at 240 seconds and leaves no ready liste
     await n.events.emit(); await flush(); assert.equal(h.engineState(), 'failed');
 });
 
+test('the full app sent to the login page fails at once as signed out, and says the account changed', async () => {
+    const h = harness(); h.startEngine(); const n = h.natives[0];
+    n.win.location.pathname = '/';
+    await h.advance(3000);
+    assert.equal(h.engineState(), 'loading');
+    n.win.location.pathname = '/login';
+    await h.advance(1000);
+    assert.equal(h.engineState(), 'failed'); assert.match(h.engineFailure(), /登录过期/);
+    assert.ok(h.engineEvents.some(e => e.type === 'account-changed'));
+    assert.equal(n.events.owned(), 0);
+});
+
 test('bridge missing after native ready fails after 20 seconds, and late bridge cannot revive it', async () => {
     const h = harness({ automaticBridge: false }); h.startEngine(); const n = h.natives[0];
     await h.advance(300); await n.events.emit(); await h.advance(20000);
