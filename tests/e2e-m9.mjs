@@ -111,7 +111,7 @@ await closeSheet();
 await page.locator('.tl-message[data-role="char"]').last().locator('.tl-message-menu').click();
 const messageItems = await sheet('消息操作').locator('.tl-sheet-item-label').allInnerTexts();
 // Like a chat app's long press: copy first, the common edits next, delete last (查看摘录 is under 更多).
-check('message menu is short', JSON.stringify(messageItems) === JSON.stringify(['复制', '编辑', '重新生成', '收藏原句', '先留这一版', '换个走向', '更多', '删除']), JSON.stringify(messageItems));
+check('message menu is short', JSON.stringify(messageItems) === JSON.stringify(['复制', '编辑', '重新生成', '收藏原句', '先留这一版', '换个走向', '分线', '更多', '删除']), JSON.stringify(messageItems));
 await sheet('消息操作').getByRole('button', { name: /^更多/ }).click();
 await sheet('更多').getByText('原版界面里的其他按钮').waitFor({ timeout: 30000 });
 check('the rest is under 更多', await sheet('更多').getByRole('button', { name: /^选择文字/ }).count() === 1

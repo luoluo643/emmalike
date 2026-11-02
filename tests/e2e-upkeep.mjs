@@ -47,6 +47,7 @@ try {
     check('helper: names the author, the official repository and the license', text.includes('KAKAA') && text.includes('github.com/N0VI028/JS-Slash-Runner')
         && text.includes('PolyForm Noncommercial License 1.0.0') && text.includes('不附带'), text.slice(0, 300));
     if (helperWasThere) {
+        await helper.getByText(/已安装/).first().waitFor({ timeout: 30000 }).catch(() => { });  // the status is read after the sheet opens
         check('helper: an installed Tavern Helper is not offered again', (await helper.innerText()).includes('不用再装') || (await helper.innerText()).includes('停用'), await helper.innerText());
     } else {
         await helper.getByRole('button', { name: /^安装酒馆助手/ }).click();
