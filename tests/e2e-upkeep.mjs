@@ -32,7 +32,13 @@ const discover = async () => (await (await page.request.get(`${base}/api/extensi
 const helperFolder = 'JS-Slash-Runner';
 const helperWasThere = (await discover()).some(n => n.endsWith(`/${helperFolder}`));
 const openMe = async () => {
-    await page.goto(appUrl + '#me');
+    // The app may still be finishing a navigation of its own (a reload it asked for): try again once it settles.
+    for (let i = 0; ; i++) {
+        try { await page.goto(appUrl + '#me'); break; } catch (error) {
+            if (i === 2 || !/interrupted by another navigation/.test(error.message)) throw error;
+            await page.waitForTimeout(1000);
+        }
+    }
     await page.getByRole('button', { name: /^检查更新/ }).waitFor({ timeout: 60000 });
 };
 const sheet = title => page.getByRole('dialog', { name: title });
