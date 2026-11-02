@@ -3,7 +3,7 @@ import * as api from './api.js';
 import * as engine from './engine.js';
 import { ChapterActions, ChapterRow, ChapterSearch, useChapterSearch, useChapters } from './chapters.jsx';
 import { substituteNames } from './render.js';
-import { Lightbox, PageHeader, go, friendlyError } from './ui.jsx';
+import { Lightbox, PageHeader, go, friendlyError, Loading } from './ui.jsx';
 import { storyIdentityLabel } from './episodes.jsx';
 
 /** A character presented as a book: cover, introduction, and its chapters (chat files). */
@@ -65,7 +65,7 @@ export function WorkPage({ avatar, user, withBridge, onOpenPanel, onEditCharacte
                     <section class="tl-section">
                         <h2 class="tl-section-title">故事{chapters ? ` · ${chapters.length}` : ''}</h2>
                         {chaptersError && <p class="tl-error">{chaptersError}</p>}
-                        {chapters === null && !chaptersError && <p class="tl-muted">正在加载…</p>}
+                        {chapters === null && !chaptersError && <Loading />}
                         {chapters?.length === 0 && <p class="tl-muted">还没有故事</p>}
                         <ChapterSearch chapters={chapters} query={query} onQuery={setQuery} searching={searching} found={shown?.length ?? 0} />
                         <div class="tl-chapter-list">

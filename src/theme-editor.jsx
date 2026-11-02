@@ -6,7 +6,7 @@ import {
     FONTS, PRESETS, SNIPPETS, applyReading, cachedReading, cachedThemes, deleteTheme, exportTheme, hasSnippet, luminance,
     newThemeId, readableOn, saveTheme, themeVars, toggleSnippet,
 } from './theme.js';
-import { Choices, ConfirmSheet, PageHeader, Sheet, Spinner, downloadFile, friendlyError } from './ui.jsx';
+import { Choices, ConfirmSheet, PageHeader, Sheet, Spinner, downloadFile, friendlyError, Loading } from './ui.jsx';
 
 const COLORS = [
     { key: 'text', label: '文字' },
@@ -99,7 +99,7 @@ function BackgroundPicker({ onPick, onClose }) {
     return (
         <Sheet title="从酒馆背景里选" onClose={onClose}>
             {error && <p class="tl-error tl-sheet-note">{error}</p>}
-            {list === null && !error && <p class="tl-muted tl-sheet-note">正在加载…</p>}
+            {list === null && !error && <Loading sheet />}
             {list?.length === 0 && <p class="tl-muted tl-sheet-note">酒馆的背景库是空的，可以直接上传一张</p>}
             <div class="tl-bg-grid">
                 {list?.map(bg => (

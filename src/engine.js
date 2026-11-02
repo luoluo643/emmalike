@@ -344,10 +344,19 @@ function answerFirstRun(dialog) {
     return true;
 }
 
+// The app's own dialogs are <dialog>; extensions draw theirs as an element marked modal (Tavern Helper's "enable the
+// character's scripts?" is a div with role=dialog). The app itself never marks anything aria-modal.
+const DIALOG_SOURCES = 'dialog[open], [role="dialog"][aria-modal="true"]';
+
+function openDialogs() {
+    const found = iframe?.contentDocument?.querySelectorAll(DIALOG_SOURCES) ?? [];
+    return [...found].filter(el => el.matches('dialog') || !el.parentElement?.closest('dialog'));
+}
+
 function watchDialogs() {
     let open = false;
     const now = Date.now();
-    for (const dialog of iframe?.contentDocument?.querySelectorAll('dialog[open]') ?? []) {
+    for (const dialog of openDialogs()) {
         if (answerFirstRun(dialog)) continue;
         if (!needsUser(dialog)) continue;
         if (!dialogFirstSeen.has(dialog)) dialogFirstSeen.set(dialog, now);
@@ -360,6 +369,87 @@ function watchDialogs() {
     if (dialogWasOpen && !open) emit('popup-closed');
     dialogWasOpen = open;
     return open;
+}
+
+// A plain question (some text, at most a line of input and a few ticks, a few buttons) is asked again in the shell
+// and answered there; anything else (a picture to crop, a list to pick from, a long form) needs the full app.
+const POPUP_TEXT_MAX = 1500;
+const POPUP_BUTTON_MAX = 6;
+const POPUP_TICK_MAX = 4;
+const POPUP_BUTTONS = 'button, .menu_button, [role="button"], input[type="button"], input[type="submit"]';
+const POPUP_FIELDS = 'input, textarea, select';
+const TEXT_INPUTS = ['', 'text', 'search', 'number', 'email', 'url', 'tel'];
+const popupIds = new WeakMap();
+let nextPopupId = 1;
+let shownPopup = null;
+
+const labelOf = el => (el.innerText || el.value || el.title || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+
+function fieldLabel(el) {
+    const label = el.closest('label') ?? (el.id ? el.ownerDocument.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null);
+    return (label ? labelOf(label) : '') || el.placeholder || el.getAttribute('aria-label') || '';
+}
+
+/** The full app's top open dialog that waits on the user, as the shell can show it; null when there is none. */
+export function nativePopup() {
+    const dialog = openDialogs().filter(el => needsUser(el) && !el.querySelector('.onboarding')).at(-1);
+    if (!dialog) return null;
+    if (!popupIds.has(dialog)) popupIds.set(dialog, nextPopupId++);
+    let simple = true;
+    const fields = [], fieldEls = [], buttons = [], buttonEls = [];
+    for (const el of dialog.querySelectorAll(POPUP_FIELDS)) {
+        if (el.type === 'hidden' || !visible(el) || el.closest(POPUP_BUTTONS)) continue;
+        const kind = el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'INPUT' && el.type === 'checkbox' ? 'checkbox'
+            : el.tagName === 'INPUT' && TEXT_INPUTS.includes(el.getAttribute('type') ?? '') ? 'text' : null;
+        if (!kind) { simple = false; continue; }
+        fields.push({ kind, label: fieldLabel(el), value: kind === 'checkbox' ? '' : el.value, checked: kind === 'checkbox' && el.checked });
+        fieldEls.push(el);
+    }
+    for (const el of dialog.querySelectorAll(POPUP_BUTTONS)) {
+        if (!visible(el) || el.parentElement?.closest(POPUP_BUTTONS)) continue;
+        // The corner ✕ of the app's dialogs: closing the shell's copy leaves the dialog to the full app instead.
+        if (el.matches('.popup-button-close')) continue;
+        const label = labelOf(el);
+        if (!label) { simple = false; continue; }
+        buttons.push({ label, primary: el.matches('.popup-button-ok, [type="submit"], [class*="primary"]') });
+        buttonEls.push(el);
+    }
+    const controlLabels = new Set([...buttons.map(b => b.label), ...fields.map(f => f.label)].filter(Boolean));
+    const text = (dialog.innerText ?? '').split('\n').map(line => line.trim())
+        .filter(line => !controlLabels.has(line.replace(/\s+/g, ' '))).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    const ticks = fields.filter(f => f.kind === 'checkbox').length;
+    const pictures = [...dialog.querySelectorAll('img, canvas, video, iframe')].some(el => el.offsetWidth > 64 && el.offsetHeight > 64);
+    if (fields.length - ticks > 1 || ticks > POPUP_TICK_MAX || !buttons.length || buttons.length > POPUP_BUTTON_MAX
+        || text.length > POPUP_TEXT_MAX || pictures) simple = false;
+    if (!buttons.some(b => b.primary) && buttons.length) buttons[0].primary = true;
+    const id = popupIds.get(dialog);
+    shownPopup = { id, dialog, fieldEls, buttonEls };
+    return { id, text, fields, buttons, simple };
+}
+
+/**
+ * Answers a dialog read with nativePopup(): fills its inputs and ticks with `values` (in the order of its fields)
+ * and presses button `index`. False when that dialog is no longer open.
+ */
+export function answerNativePopup(id, values, index) {
+    const popup = shownPopup;
+    if (!popup || popup.id !== id || !popup.dialog.isConnected || !openDialogs().includes(popup.dialog) || !needsUser(popup.dialog)) return false;
+    const button = popup.buttonEls[index];
+    if (!button?.isConnected) return false;
+    popup.fieldEls.forEach((el, i) => {
+        const value = values?.[i];
+        if (value === undefined || !el.isConnected) return;
+        if (el.type === 'checkbox') {
+            if (el.checked !== !!value) el.click();
+        } else if (el.value !== String(value)) {
+            el.value = String(value);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    });
+    button.click();
+    shownPopup = null;
+    return true;
 }
 
 async function connectBridge(run, connection) {
@@ -638,6 +728,8 @@ export function showNative(visibleNow) {
 // Floating layers (see the bridge): while the shell is on screen and the full app has any, its page is laid over
 // the shell, transparent, and cut down to their rectangles, so only they show and only they take touches.
 let floats = [];
+let floatsAllowed = true;
+let floatCover = false;
 const FLOAT_MARGIN = 2;
 
 function setFloats(rects) {
@@ -647,7 +739,7 @@ function setFloats(rects) {
 
 function applyOverlay() {
     if (!iframe) return;
-    const on = floats.length > 0 && !iframe.classList.contains('visible') && state === 'ready';
+    const on = floats.length > 0 && floatsAllowed && !iframe.classList.contains('visible') && state === 'ready';
     iframe.classList.toggle('overlay', on);
     iframe.style.clipPath = on
         ? `path('${floats.map(r => {
@@ -659,6 +751,26 @@ function applyOverlay() {
     const scheme = on ? getComputedStyle(document.documentElement).colorScheme || 'normal' : '';
     iframe.style.colorScheme = scheme;
     getBridge()?.setOverlay?.(on, scheme);
+    const cover = on && floats.some(r => r.width * r.height >= innerWidth * innerHeight * 0.9);
+    if (cover !== floatCover) {
+        floatCover = cover;
+        emit('float-cover', cover);
+    }
+}
+
+/** Floating layers belong to the story that is open: they show only while it is on screen. */
+export function setFloatsAllowed(allowed) {
+    floatsAllowed = allowed;
+    applyOverlay();
+}
+
+export function floatsCovering() {
+    return floatCover;
+}
+
+/** Offers the back gesture to the layer filling the screen; true if it took it. */
+export function floatBack() {
+    return !!getBridge()?.floatBack?.();
 }
 
 addEventListener('visibilitychange', () => {

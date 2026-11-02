@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import * as engine from './engine.js';
-import { ConfirmSheet, friendlyError, Sheet, SheetItem } from './ui.jsx';
+import { ConfirmSheet, friendlyError, Sheet, SheetItem, Loading } from './ui.jsx';
 import { hasStory, makeSource, mutation, newRecord, readRecords, sameStory, saveRecord, sourceMessages, locateSource } from './personal-records.js';
 import './personal-workspace.css';
 
@@ -272,7 +272,7 @@ export function PersonalSheet({ user, scope, initialRecord, onClose, onLocate, n
         {error && <p class="tl-error" role="alert">{error} <button class="tl-button" onClick={reload}>重新载入</button></p>}
         {recent && <PersonalNotice record={recent} busy={busy} onNote={() => setEditing(recent)} onUndo={() => action(recent, 'delete')} onClose={() => setRecent(null)} />}
         {undo && <div class="tl-personal-notice" role="status">已删除记录 <button class="tl-button" disabled={busy} onClick={() => action(undo, 'restore')}>撤销删除</button></div>}
-        {visibleRecords === null && !error && <p>正在加载…</p>}
+        {visibleRecords === null && !error && <Loading />}
         {visibleRecords && !shown.length && <p class="tl-muted">还没有摘录。长按消息可以收藏一句，或先留下一版回复</p>}
         {shown.map(record => <article class="tl-personal-record" key={`${record.storage}:${record.id}`} data-record-id={record.id}>
             <p class="tl-muted">{record.kind === 'quote' ? '原句' : '留下的版本'} · {place(record)} · {new Date(record.createdAt).toLocaleDateString()}</p>

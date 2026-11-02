@@ -3,7 +3,7 @@
 import { createContext } from 'preact';
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import * as engine from './engine.js';
-import { ConfirmSheet, EngineStatus, PageHeader, PromptSheet, Sheet, friendlyError, go, goBack, useBackLayer } from './ui.jsx';
+import { ConfirmSheet, EngineStatus, PageHeader, PromptSheet, Sheet, friendlyError, go, goBack, useBackLayer, Loading } from './ui.jsx';
 import { cloneJson } from './episode-model.js';
 import { WORLD_DECISION_ACK, WORLD_ENTRY_FIELDS, WORLD_FIELD_LABELS, hasWorldUserDecision, isBlockingWorldOperation, worldChanges, worldSearch, worldFingerprint, refreshWorldDraft, applySavedWorldDraft } from './world-editor-model.js';
 import './world-editor.css';
@@ -363,7 +363,7 @@ export function WorldBookPage({ book, entry: entryUid, eng, notify, onOpenNative
             </PageHeader>
             {!bridge && <Waiting eng={eng} what="世界书" />}
             {error && <p class="tl-error">{error}</p>}
-            {bridge && !data && !error && <p class="tl-muted">正在加载…</p>}
+            {bridge && !data && !error && <Loading />}
             {data && (
                 <>
                     {readOnlyReason && <p class="tl-error">{readOnlyReason}</p>}
@@ -747,7 +747,7 @@ function EntryEditor({ account, sources, book, entry, scopeUid, readOnlyReason, 
                 {!form.constant && (
                     <Field label="关键词" hint="一行一个，也可以用逗号或顿号隔开。故事里提到时才可能告诉 AI" id="tl-wi-keys">
                         <textarea id="tl-wi-keys" class="tl-input tl-field" rows={3} value={form.keyText} spellcheck={false}
-                            placeholder={'例如：\n林小满\n书店'} onInput={e => set('keyText', e.currentTarget.value)} />
+                            placeholder={'例如：\n旧书店\n雨巷'} onInput={e => set('keyText', e.currentTarget.value)} />
                     </Field>
                 )}
                 {!form.constant && (values.key ?? []).some(joined) && (

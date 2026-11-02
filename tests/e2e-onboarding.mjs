@@ -1,5 +1,5 @@
 // Fresh account: the full app's first-run dialog is answered inside the hidden engine; the shelf leads to 开始使用, which
-// sets the name, a model service and (offered) the Chinese sample character, and ends in a story with it.
+// sets the name and a model service, and ends in a story.
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_CORE ?? 'playwright-core');
@@ -25,7 +25,7 @@ await page.goto(`${base}/scripts/extensions/third-party/emmalike/app/`);
 await page.getByPlaceholder('账号').fill(handle);
 await page.getByPlaceholder('密码（没设可不填）').fill('pw123456');
 await page.getByRole('button', { name: '登录' }).click();
-// The shelf: nothing jumps away while it is read; a banner leads to 开始使用, and a Chinese sample is offered.
+// The shelf: nothing jumps away while it is read; a banner leads to 开始使用, and no sample is offered.
 await page.locator('.tl-character').first().waitFor();
 const t = Date.now();
 await page.getByRole('button', { name: /^还没连上 AI 模型/ }).waitFor({ timeout: 240000 });
@@ -34,8 +34,8 @@ if (await page.locator('.tl-setup').count()) throw new Error('the shelf jumped t
 if (await page.locator('.tl-popup-bar').count()) throw new Error('the full app’s first-run dialog was offered instead of answered');
 if (await page.locator('iframe.engine.visible').count()) throw new Error('the full app took over the screen');
 console.log('no English first-run dialog, no jump: PASS');
-if (!await page.getByRole('button', { name: /^试试中文示例角色/ }).count()) throw new Error('no Chinese sample offered on a new shelf');
-console.log('sample character offered: PASS');
+if (await page.getByText(/示例角色/).count()) throw new Error('a sample character is still offered');
+console.log('no sample character offered: PASS');
 await page.getByRole('button', { name: /^还没连上 AI 模型/ }).click();
 await page.locator('.tl-setup').waitFor({ timeout: 15000 });
 const nameField = page.getByRole('textbox', { name: '你的名字' });
@@ -54,14 +54,13 @@ await page.getByRole('button', { name: '连接', exact: true }).click();
 await page.getByRole('radiogroup', { name: '模型', exact: true }).waitFor({ timeout: 60000 });
 console.log('setup connected: PASS');
 if (await page.getByRole('button', { name: '先跳过' }).count()) throw new Error('先跳过 still offered after connecting');
-if (!await page.getByRole('checkbox', { name: /中文示例角色/ }).isChecked()) throw new Error('sample checkbox not offered or not checked');
 await page.getByRole('button', { name: /^完成，开始聊天/ }).click();
 await page.locator('.tl-composer-input').waitFor({ timeout: 30000 });
 // The title reads "…" until the character is loaded.
 await page.waitForFunction(() => (document.querySelector('.tl-chat-title')?.textContent ?? '…') !== '…', null, { timeout: 30000 }).catch(() => { });
 const title = await page.locator('.tl-chat-title').innerText();
-if (title !== '林小满') throw new Error(`finishing opened ${title}, not the sample`);
-console.log('finishing opens a story with the sample character: PASS');
+if (!title || title === '…') throw new Error('finishing opened no story');
+console.log(`finishing opens a story (${title}): PASS`);
 await page.waitForFunction(() => document.querySelector('.tl-chapter')?.textContent.includes('第 1 个故事'), null, { timeout: 30000 })
     .catch(async () => { throw new Error(`story title is ${await page.locator('.tl-chapter').innerText()}`); });
 console.log('unnamed story is numbered: PASS');

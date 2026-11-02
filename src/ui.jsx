@@ -18,6 +18,7 @@ export function parseHash() {
     if (params.has('worlds')) return { name: 'worlds' };
     if (params.has('world')) return { name: 'world', book: params.get('world') ?? '', entry: params.get('entry') ?? '' };
     if (params.has('preset')) return { name: 'preset' };
+    if (params.has('regex')) return { name: 'regex', group: params.get('regex') || '', id: params.get('id') ?? '' };
     return { name: 'library' };
 }
 
@@ -31,6 +32,7 @@ export function routeHash(route) {
     if (route.name === 'worlds') return '#worlds';
     if (route.name === 'world') return '#' + new URLSearchParams({ world: route.book ?? '', ...(route.entry ? { entry: route.entry } : {}) }).toString();
     if (route.name === 'preset') return '#preset';
+    if (route.name === 'regex') return route.id ? '#' + new URLSearchParams({ regex: route.group || 'global', id: route.id }).toString() : route.group ? `#regex=${route.group}` : '#regex';
     if (route.name === 'edit') return route.avatar ? '#' + new URLSearchParams({ edit: route.avatar }).toString() : '#create';
     if (route.name === 'theme') return '#' + new URLSearchParams({ theme: route.id ?? '', ...(route.base ? { base: route.base } : {}) }).toString();
     return '#';
@@ -241,6 +243,8 @@ export function plainSnippet(text) {
 // ("换个走向") or a checkpoint is the story's name plus " - Branch #2" / " - Checkpoint #1"; it keeps its story's name.
 const AUTO_NAME = /^(.*) - (\d{4})-(\d{1,2})-(\d{1,2}) ?@ ?(\d{1,2})h ?(\d{1,2})m(?: ?(\d{1,2})s)?(?: ?(\d{1,3})ms)?$/;
 const OFFSHOOT = / - (Branch|Checkpoint) #(\d+)$/;
+// Files the app makes for a side story are named by a random id, which means nothing to a reader.
+const EPISODE_FILE = /^tl-episode-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 function autoNameTime(file, characterName) {
     const match = String(file ?? '').replace(/\.jsonl$/, '').match(AUTO_NAME);
@@ -269,6 +273,7 @@ export function chapterLabel(file, characterName, numbers) {
         const story = chapterLabel(name.slice(0, offshoot.index), characterName, numbers);
         return `${story} · ${offshoot[1] === 'Branch' ? '走向' : '存档点'} ${offshoot[2]}`;
     }
+    if (EPISODE_FILE.test(name)) return '番外';
     if (autoNameTime(name, characterName) !== null) {
         const n = numbers?.get(name);
         return n ? `第 ${n} 个故事` : '故事';
@@ -430,6 +435,16 @@ export function Lightbox({ src, alt, onClose }) {
 }
 
 /** Thin status line shown while the full app loads, so waiting is never silent. */
+/** What shows while something is read: a ring and the words, then grey lines where the text will be. */
+export function Loading({ label = '正在加载…', lines = 3, sheet = false, story = false }) {
+    return (
+        <div class={`tl-loading${sheet ? ' tl-sheet-note' : ''}${story ? ' tl-loading-story' : ''}`} role="status">
+            <p class="tl-muted"><Spinner />{label}</p>
+            {Array.from({ length: lines }, (_, i) => <div class="tl-skeleton tl-skeleton-line" key={i} />)}
+        </div>
+    );
+}
+
 /**
  * In place of a sheet's content that needs the full app: the real wait (and that the content appears by itself), never
  * "马上就好" while a phone may need minutes. Asks the app to load if it is not.
@@ -569,6 +584,35 @@ export function ConfirmSheet({ title, message, confirmLabel, busyLabel, onConfir
                         onClick={() => { if (!lock.current) start(onConfirm()); }}>{busyText(busy, confirmLabel, busyLabel)}</button>
                     <button class="tl-button" disabled={busy} onClick={onClose}>取消</button>
                 </div>
+            </div>
+        </Sheet>
+    );
+}
+
+/**
+ * A question the full app asks (see engine.nativePopup), asked again here with its own words and buttons.
+ * `onAnswer(values, index)` gets what was typed and ticked and the button pressed; `onNative` shows the original.
+ */
+export function NativePopupSheet({ popup, onAnswer, onNative, onClose }) {
+    const [values, setValues] = useState(() => popup.fields.map(f => f.kind === 'checkbox' ? f.checked : f.value));
+    const set = (i, value) => setValues(list => list.map((v, j) => j === i ? value : v));
+    return (
+        <Sheet title="需要你确认一下" className="tl-native-popup" onClose={onClose}>
+            <div class="tl-settings-group">
+                {popup.text && <p class="tl-confirm-message tl-native-popup-text">{popup.text}</p>}
+                {popup.fields.map((f, i) => f.kind === 'checkbox'
+                    ? <button key={i} class="tl-sheet-item tl-switch-row" role="switch" aria-checked={values[i] ? 'true' : 'false'}
+                        onClick={() => set(i, !values[i])}>{f.label || '勾选'}</button>
+                    : <label key={i} class="tl-native-popup-field">
+                        {f.label && <span class="tl-settings-label">{f.label}</span>}
+                        {f.kind === 'textarea'
+                            ? <textarea class="tl-input" rows={3} value={values[i]} onInput={e => set(i, e.currentTarget.value)} />
+                            : <input class="tl-input" value={values[i]} autoComplete="off" onInput={e => set(i, e.currentTarget.value)} />}
+                    </label>)}
+                <div class="tl-row">
+                    {popup.buttons.map((b, i) => <button key={i} class={`tl-button${b.primary ? ' tl-primary' : ''}`} onClick={() => onAnswer(values, i)}>{b.label}</button>)}
+                </div>
+                <button class="tl-ghost tl-native-popup-more" onClick={onNative}>在原版界面里看</button>
             </div>
         </Sheet>
     );

@@ -51,8 +51,6 @@ export function SetupPage({ user, eng, notify, from, onAccountChanged }) {
     const [reply, setReply] = useState('');
     const [filter, setFilter] = useState('');
     const [typedModel, setTypedModel] = useState('');
-    const [sample, setSample] = useState(null);
-    const [addSample, setAddSample] = useState(true);
     const named = useRef('');
     // The profile this visit saved: reconnecting or picking a model updates it instead of making another one.
     const made = useRef('');
@@ -64,14 +62,6 @@ export function SetupPage({ user, eng, notify, from, onAccountChanged }) {
         ? choices.profiles.find(p => p.id === choices.profile)?.name || '现在用的设置' : '';
 
     useEffect(() => { engine.requestEngine('action'); }, []);
-    // Offer the Chinese sample character while the shelf has only the app's bundled (English) ones.
-    useEffect(() => {
-        let alive = true;
-        Promise.all([import('./sample.js'), api.getCharacters()])
-            .then(([m, characters]) => alive && setSample(m.wantsSample(characters) ? m : null))
-            .catch(() => { });
-        return () => { alive = false; };
-    }, []);
 
     /** Saves a try that could not be checked, now that a reply came or the user keeps it. */
     const keepTry = async () => {
@@ -89,16 +79,12 @@ export function SetupPage({ user, eng, notify, from, onAccountChanged }) {
         }
         goBack({ name: 'library' });
     };
-    /** Into a story: back to the one that sent us here, else the sample character or the latest story. */
+    /** Into a story: back to the one that sent us here, else the latest story or the first character. */
     const finish = async () => {
         await keepTry();
         if (from === 'story') return goBack({ name: 'library' });
         setBusy('finish');
         try {
-            if (sample && addSample) {
-                const avatar = await sample.addSample();
-                return go({ name: 'chat', avatar, file: '', fresh: true }, true);
-            }
             const [recent] = await api.getRecentChats(1);
             if (recent?.avatar) return go({ name: 'chat', avatar: recent.avatar, file: api.chatId(recent.file_name) }, true);
             const [first] = await api.getCharacters();
@@ -296,12 +282,6 @@ export function SetupPage({ user, eng, notify, from, onAccountChanged }) {
                             )}
                             {models.length > shown.length && <p class="tl-muted tl-choice-hint">还有 {models.length - shown.length} 个，输入名字搜索。</p>}
                             {needle && models.length === 0 && <p class="tl-muted tl-choice-hint">没有找到这个模型。</p>}
-                            {sample && from !== 'story' && (
-                                <label class="tl-check-row">
-                                    <input type="checkbox" checked={addSample} onChange={e => setAddSample(e.currentTarget.checked)} />
-                                    <span>顺便添加中文示例角色「{sample.SAMPLE_NAME}」，完成后直接和她聊</span>
-                                </label>
-                            )}
                             <div class="tl-row">
                                 <button class="tl-button" disabled={!!busy} onClick={tryIt}>{busy === 'test' ? '正在等回复…' : '试一句'}</button>
                                 <button class="tl-button tl-primary" disabled={!!busy} onClick={finish}>{busy === 'finish' ? '正在打开…' : '完成，开始聊天'}</button>

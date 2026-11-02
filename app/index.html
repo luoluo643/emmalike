@@ -29,7 +29,14 @@
                 var value = owner && localStorage.getItem('tavern-lite:appearance:v1:' + JSON.stringify(owner) + ':' + part);
                 return value !== null && value !== undefined && value !== '' ? value : localStorage.getItem(legacy);
             };
-            add('tl-reading-css', mine('reading-css', 'tavern-lite:reading-css'));
+            // Every build rewrites 'look-css' as soon as it runs (theme.js refreshBootLook). A copy from before that keeps
+            // its colours but not its pictures: they may have changed since, and this build replaces the copy in a moment.
+            var look = mine('look-css', 'tavern-lite:look-css');
+            if (!look) {
+                look = mine('reading-css', 'tavern-lite:reading-css');
+                look = look && look.replace(/url\(["']?[^"')]*\/skins\/[^)]*\)/g, 'none');
+            }
+            add('tl-reading-css', look);
             // New UI scale is independent of legacy cached reading CSS, including before the bundle loads.
             var display = owner && JSON.parse(localStorage.getItem('tavern-lite:display:v1:' + JSON.stringify(owner)));
             if (display && display.schemaVersion === 1 && Number.isFinite(Number(display.fontSize))) {
@@ -38,8 +45,8 @@
             add('tl-user-css', /[?&]safe\b/.test(location.search) ? '' : mine('custom-css', 'tavern-lite:custom-css'));
         } catch (e) { }
     </script>
-  <script type="module" crossorigin src="./assets/index-Dhix5x9E.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-DRoNvw0I.css">
+  <script type="module" crossorigin src="./assets/index-DW6KO-lk.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-CFjCeO0U.css">
 </head>
 <body>
     <div id="root"><div class="tl-boot">正在打开…</div></div>

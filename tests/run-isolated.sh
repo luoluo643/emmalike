@@ -19,9 +19,9 @@ LOG_DIR=${LOG_DIR:-/tmp/$PROJECT}
 if [ "${1:-}" = down ]; then docker compose down --remove-orphans; rm -rf config data plugins extensions installation.json e2e-*-p"$ST_PORT".mjs; echo DOWN; exit; fi
 mkdir -p "$LOG_DIR"
 export TAVERN_HELPER_REF="${TAVERN_HELPER_REF-}" INSTALL_PANEL_FIXTURE="${INSTALL_PANEL_FIXTURE:-0}"
-bash ./prepare.sh > "$LOG_DIR/prepare.log" 2>&1 || { echo PREPARE-FAILED; tail -5 "$LOG_DIR/prepare.log"; }
+bash ./prepare.sh > "$LOG_DIR/prepare.log" 2>&1 || { echo PREPARE-FAILED; tail -5 "$LOG_DIR/prepare.log"; exit 1; }
 if [ "${WITH_HORAE:-0}" = 1 ]; then
-    cp -r "${HORAE_DIR:-/home/ubuntu/sillytavern/third-party/SillyTavern-Horae}" extensions/ && echo "with Horae $(md5sum extensions/SillyTavern-Horae/index.js | cut -c1-8)"
+    cp -r "${HORAE_DIR:?with WITH_HORAE=1 set HORAE_DIR to a copy of the Horae extension}" extensions/ && echo "with Horae $(md5sum extensions/SillyTavern-Horae/index.js | cut -c1-8)"
 fi
 tr -d '\n ' < installation.json; echo; echo "image $ST_IMAGE"
 export CHROME_PATH=${CHROME_PATH:-$(ls -d ~/.cache/ms-playwright/chromium_headless_shell-*/*/ | head -1)chrome-headless-shell}
@@ -40,6 +40,7 @@ args_for() {
         *) if grep -q "startsWith('--cases=')" "$1.mjs"; then echo ""; else echo "$ST_URL default-user test1234 200 5000"; fi ;;
     esac
 }
+result=0
 for s in "$@"; do
     f=$s.mjs
     if grep -qE '127\.0\.0\.1:80(31|32|35)' "$f"; then
@@ -51,5 +52,7 @@ for s in "$@"; do
     grep -E '^(FAIL|PASS|FAILURE|PROBLEMS|ALL PASS)|"FAIL|"passed"' "$LOG_DIR/$s.log" | grep -v '^PASS' | tail -15
     [ $rc = 137 ] && echo "killed after ${TIMEOUT:-900}s"
     echo "exit $rc"
+    if [ "$rc" -ne 0 ]; then result=1; fi
 done
 echo RUN-DONE
+exit "$result"

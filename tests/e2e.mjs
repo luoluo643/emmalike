@@ -155,7 +155,7 @@ await page.getByRole('button', { name: '我的' }).click();
 await page.getByRole('button', { name: /^自定义 CSS/ }).click();
 await page.locator('.tl-css-editor').fill(':root { --tl-bg: rgb(18, 52, 86); }');
 await page.getByRole('button', { name: '保存' }).click();
-const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+const bg = await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor);
 check('custom css applied over base layer', bg === 'rgb(18, 52, 86)', bg);
 await page.waitForFunction(() => {
     try {

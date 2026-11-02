@@ -6,7 +6,7 @@ import { mountCards, mirrorPanels } from './cards.js';
 import { ChapterActions, ChaptersSheet, useChapters } from './chapters.jsx';
 import { Icon } from './icons.jsx';
 import { previewHtml } from './render.js';
-import { ConfirmSheet, EngineStatus, Sheet, SheetItem, Spinner, chapterLabel, copyText, go, relativeTime, routeHash, useLongPress, friendlyError } from './ui.jsx';
+import { ConfirmSheet, EngineStatus, Sheet, SheetItem, Spinner, chapterLabel, copyText, go, relativeTime, routeHash, useLongPress, friendlyError, Loading } from './ui.jsx';
 import { PersonaSheet } from './persona.jsx';
 import { modelSummary, currentPresetName, PresetPickSheet } from './model.jsx';
 import { hiddenInputButtons, setInputButtonHidden } from './input-buttons.js';
@@ -23,6 +23,7 @@ import { forksByIndex, storyBranches } from './branches.js';
 import { MAIN_LINE, idsFromMarks, lineView } from './line-view.js';
 import { ownIds, readRegistry } from './own-lines.js';
 import { TocSheet } from './toc.jsx';
+import { sameFloor } from './same-floor.js';
 
 const PAGE = 40;
 
@@ -411,13 +412,20 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
 
     useEffect(() => {
         let alive = true;
+        // A story named in the address is read alongside its character (one round trip instead of two), under the name
+        // the shelf knew; read again in turn if the character turns out to be called something else now.
+        const known = !route.fresh && route.file ? api.knownName(route.avatar) : null;
+        const early = known ? Promise.all([api.getChat({ avatar: route.avatar, name: known }, route.file), readLooks(user.handle, route.avatar, route.file)]) : null;
+        early?.catch(() => {});
         api.getCharacter(route.avatar)
             .then(async c => {
                 if (!alive) return;
                 setCharacter(c);
                 const file = route.fresh ? '' : route.file || api.chatId(c.chat);
                 resolveFile(file);
-                const [messages, kept] = await Promise.all([file ? api.getChat(c, file) : [], readLooks(user.handle, route.avatar, file)]);
+                const [messages, kept] = await (early && c.name === known
+                    ? early
+                    : Promise.all([file ? api.getChat(c, file) : [], readLooks(user.handle, route.avatar, file)]));
                 if (!alive) return;
                 setLooks(kept);
                 setPreview(messages.length ? messages : [{ name: c.name, is_user: false, mes: c.first_mes ?? '' }]);
@@ -605,6 +613,11 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     const last = messages[messages.length - 1];
     // Replying, retrying and continuing work on the story's last message: only when this page shows it.
     const atEnd = !!last && last.index === storyTotal - 1;
+    // A same-floor card is shown like the full app shows it: its one interface, the messages it took over folded away.
+    const [floorOpen, setFloorOpen] = useState(false);
+    useEffect(() => setFloorOpen(false), [chatFile]);
+    const floor = useMemo(() => character ? sameFloor(messages) : null, [messages, character]);
+    const folded = !!floor && !floorOpen;
     const openLine = id => {
         setSheet(null);
         nearBottom.current = true;
@@ -616,6 +629,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     const showMessage = index => {
         setSheet(null);
         if (index < ownFrom) setCopiedOpen(true);
+        if (folded && index !== floor.host) setFloorOpen(true);
         const whole = index < ownFrom ? layoutOf(0) : lines;
         if (whole.enabled && whole.lineOf(index)) setLineChoice(whole.lineOf(index));
         setSeekTo(index);
@@ -637,7 +651,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     }, [lookMark, eng.generating]);
     // Each line keeps its own place; the 正文 (or a story without lines) keeps the story's.
     const rank = pick ? index => { const at = pick.indexOf(index); return at < 0 ? null : pick.length - at; } : null;
-    const reading = useReadingPosition({ list, key: scopedKey('reading', chatFile) + (view && view !== MAIN_LINE ? `#${view}` : ''), all,
+    const reading = useReadingPosition({ list, key: scopedKey('reading', chatFile) + (view && view !== MAIN_LINE ? `#${view}` : '') + (folded ? '#same-floor' : ''), all,
         ready: !!character && (synced || preview !== null), limit, setLimit, nearBottom, notify, rank });
     useEffect(() => {
         if (seekTo === null) return;
@@ -797,7 +811,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
         setPending(null);
         // Both cancel and edit preserve the original, without overwriting later input.
         setDraft(d => [d, text].filter(Boolean).join('\n'));
-        notify('已取消发送，文字已放回输入框', 'info');
+        notify('已撤回，文字放回输入框了', 'info');
     };
 
     const onKeyDown = event => {
@@ -896,6 +910,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     };
     const persona = synced && engine.getBridge()?.capabilities.persona ? engine.getBridge().personaList?.() : null;
     const personaName = persona?.list.find(p => p.id === persona.current)?.name ?? user.name;
+    const shown = folded ? messages.filter(m => m.index === floor.host) : messages;
 
     return (
         <main class="tl-chat">
@@ -926,10 +941,10 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
             {syncError && <p class="tl-error tl-banner">{syncError} <button class="tl-button" onClick={() => setSyncError('')}>重试</button></p>}
             <div class="tl-messages" ref={list} onScroll={onScroll} onClick={onReadingClick} tabIndex={0}
                 onWheel={reading.release} onTouchStart={reading.release} onPointerDown={reading.release} onKeyDown={reading.release}>
-                {total > messages.length && (
+                {!folded && total > messages.length && (
                     <button class="tl-button tl-more" onClick={() => { nearBottom.current = false; setLimit(l => l + PAGE); }}>查看更早的 {Math.min(PAGE, total - messages.length)} 条</button>
                 )}
-                {preview === null && !live && <p class="tl-muted">正在加载…</p>}
+                {preview === null && !live && <Loading label="正在打开这个故事…" lines={8} story />}
                 {character && total <= messages.length && ownFrom > 0 && (
                     <div class="tl-card tl-copied-note">
                         <p>前面 {ownFrom} 条是开这条线时从正文带过来的，这里只显示这条线自己写的</p>
@@ -947,7 +962,13 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                     </header>
                 )}
                 {character && view && !total && <p class="tl-muted tl-line-empty">「{viewLabel || '正文'}」还没有内容，发一句就从这里开始写</p>}
-                {character && messages.map(m => <Fragment key={m.index}>
+                {floor && (
+                    <p class="tl-same-floor-note" role="status">
+                        {floorOpen ? '这个故事在一个界面里玩 · 已展开全部记录' : `这个故事在一个界面里玩 · 已收起 ${total - 1} 条记录`}
+                        <button class="tl-link" onClick={() => { nearBottom.current = floorOpen; setFloorOpen(!floorOpen); }}>{floorOpen ? '收起' : '展开'}</button>
+                    </p>
+                )}
+                {character && shown.map(m => <Fragment key={m.index}>
                     <Message message={m} character={character} user={user} display={live?.display} isLast={m === last && atEnd && !pending}
                         synced={synced} generating={eng.generating} waitingSince={generatingSince.current} swiping={swiping && m === last}
                         onMenu={message => setSheet({ type: 'message', message })}
@@ -959,7 +980,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                         <button class="tl-link" onClick={() => { nearBottom.current = true; setCopiedOpen(false); }}>收起</button></p>}
                 </Fragment>)}
                 {/* The app adds the reply only once the model service answers (a minute or more with some relays). */}
-                {character && synced && eng.generating && lastIsUser && (
+                {character && synced && eng.generating && lastIsUser && !folded && (
                     <article class="tl-message" data-role="char" data-placeholder="true">
                         <div class="tl-message-name"><span>{character.name}</span></div>
                         <Waiting since={generatingSince.current} />
@@ -970,8 +991,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                         <div class="tl-message-name" role="status">{personaName} · {sendState === 'submitted' || sendState === 'accepted' ? '已发出' : synced ? '等待发送' : '准备好后自动发出'}</div>
                         <div class="tl-message-body">{pending}</div>
                         <div class="tl-row">
-                            <button class="tl-button" disabled={sendState !== 'pending'} onClick={cancelPending}>取消发送</button>
-                            <button class="tl-button" disabled={sendState !== 'pending'} onClick={cancelPending}>改一改</button>
+                            <button class="tl-button" disabled={sendState !== 'pending'} onClick={cancelPending}>撤回修改</button>
                         </div>
                     </article>
                 )}
@@ -1076,10 +1096,12 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                         <SheetItem label={`模型：${modelSummary(engine.getBridge().modelChoices()) || '未设置'}`} hint="换模型或连接"
                             onClick={() => { setSheet(null); onModel(); }} />
                     )}
-                    {presetLabel && (
+                    {presetLabel && (<>
                         <SheetItem label={`预设：${presetLabel}`} hint="换预设或调整条目" disabled={eng.generating}
                             onClick={() => setSheet({ type: 'preset-pick' })} />
-                    )}
+                        <SheetItem label="正则" hint="折叠思维链、藏起状态栏等文字替换" disabled={eng.generating}
+                            onClick={() => { setSheet(null); go({ name: 'regex' }); }} />
+                    </>)}
                     {persona && (
                         <SheetItem label={`我的身份：${personaName}`} hint={persona.locked ? '这个故事固定用这个身份' : '你在故事里的名字和介绍'}
                             disabled={eng.generating} onClick={() => setSheet({ type: 'persona' })} />

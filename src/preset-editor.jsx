@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import * as engine from './engine.js';
-import { EngineStatus, PageHeader, Sheet, Spinner, friendlyError, goBack, useBackLayer } from './ui.jsx';
+import { EngineStatus, PageHeader, Sheet, Spinner, friendlyError, go, goBack, useBackLayer } from './ui.jsx';
 import { applySavedPromptDraft, canSubmitPresetKey, clonePreset, createPromptDraftStore, makePromptDraft, PRESET_FIELDS, presetScope, presetSearch, refreshPromptDraft, isBlockingPresetOperation, hasPresetUserDecision, presetTargetKey, PRESET_DECISION_ACK } from './preset-editor-model.js';
 import './preset-editor.css';
 
@@ -131,6 +131,18 @@ function PromptEditor({ origin, prompt, active, bridge, onDone, reload, requestS
             <button class="tl-sheet-item" onClick={() => { try { draftStore.remove(current.current); drafts.delete(scope); setLeaving(false); onDone(); }
                 catch (error) { setLeaving(false); setStatus(friendlyError(error.message)); } }}>放弃没应用的文字，返回</button></Sheet>}
     </main>;
+}
+
+/** The preset's own regex scripts go with it; their page is one tap away. */
+function PresetRegexLink({ bridge, leave }) {
+    let group = null;
+    try { group = bridge.regexEditorState().groups.find(g => g.type === 'preset'); } catch { /* the regex page says why */ }
+    if (!group?.canEdit) return null;
+    const on = group.scripts.filter(s => !s.disabled).length;
+    return <button class="tl-list-item" onClick={() => leave(() => go({ name: 'regex', group: 'preset' }))}>
+        <span class="tl-list-label">这个预设自带的正则 · {group.scripts.length} 条</span>
+        <span class="tl-list-hint">{group.scripts.length ? `${on} 条打开${group.allowed ? '' : '，这一组还没允许运行'}` : '还没有，可以在正则页新建'}</span>
+    </button>;
 }
 
 /** While the first read runs (on a large account it takes a while): what will be here, so nobody goes to the full app for it. */
@@ -404,6 +416,7 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
                         })}</div>{!shown.length && <p class="tl-muted">没有符合的条目</p>}</>}</section>
                     <ScopeNotice sources={state.sources} /><p class="tl-muted">参数和开关马上生效；提示词文字先留草稿，点「应用」才生效。存进预设的只有已经生效的内容</p>
                 </>}
+                {state && bridge?.regexEditorState && <PresetRegexLink bridge={bridge} leave={leave} />}
                 {bridge && (loaded || error || !bridge.presetEditorState) && <button class="tl-list-item" onClick={() => leave(() => onOpenPanel?.('ai-config'))}><span class="tl-list-label">在原版界面里打开</span><span class="tl-list-hint">导入导出、删除条目等更多操作</span></button>}
             </main>}
         {sheet && <Sheet title={sheet.type === 'copy' ? '另存并使用' : sheet.type === 'decision' ? '继续存这个名字的风险' : sheet.type === 'leave' ? sheet.unverified ? '改动还没检查完' : '改动已经生效' : sheet.unverified ? '切换前改动还没检查完' : '确认切换预设'} busy={busy || saving} onClose={() => setSheet(null)}>

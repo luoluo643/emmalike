@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
 import * as api from './api.js';
 import * as engine from './engine.js';
 import { EpisodeRenameSheet, episodeIdentity, storyIdentityLabel } from './episodes.jsx';
-import { ConfirmSheet, PromptSheet, Sheet, SheetItem, chapterLabel, chapterNumbers, hasGivenName, plainSnippet, relativeTime, friendlyError } from './ui.jsx';
+import { ConfirmSheet, PromptSheet, Sheet, SheetItem, chapterLabel, chapterNumbers, hasGivenName, plainSnippet, relativeTime, friendlyError, Loading } from './ui.jsx';
 
 const BAD_NAME = /[\\/:*?"<>|]/;
 
@@ -148,7 +148,7 @@ export function ChaptersSheet({ character, account, currentFile, onOpen, onNew, 
             <ChapterSearch chapters={all} query={query} onQuery={setQuery} searching={searching} found={chapters?.length ?? 0} />
             {!query.trim() && <SheetItem label="＋ 开始新故事" hint="从头开始，不带之前的记忆" onClick={() => { onClose(); onNew(); }} />}
             {error && <p class="tl-error tl-sheet-note">{error}</p>}
-            {chapters === null && !error && <p class="tl-muted tl-sheet-note">正在加载…</p>}
+            {chapters === null && !error && <Loading sheet />}
             {chapters?.map(chapter => {
                 const file = api.chatId(chapter.file_name);
                 return (

@@ -240,7 +240,7 @@ test('bridge missing after native ready fails after 20 seconds, and late bridge 
 test('an open user dialog still extends the native-ready deadline', async () => {
     const h = harness(); h.startEngine(); const n = h.natives[0];
     const visible = { offsetWidth: 10, offsetHeight: 10 };
-    n.dialogs.push({ ...visible, querySelector: () => null, querySelectorAll: () => [visible] });
+    n.dialogs.push({ ...visible, matches: selector => selector === 'dialog', querySelector: () => null, querySelectorAll: () => [visible] });
     await h.advance(241000); assert.equal(h.engineState(), 'loading');
     n.dialogs.length = 0; await h.advance(240300); assert.equal(h.engineState(), 'failed');
 });

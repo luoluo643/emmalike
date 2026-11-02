@@ -3,7 +3,7 @@ import * as engine from './engine.js';
 import { chatId, getCurrentUser } from './api.js';
 import { EPISODE_NAMESPACE, sameLocator, validateEpisodeMeta } from './episode-model.js';
 import { CONTEXT_MODES, EPISODE_KINDS, resolveNamedEpisode } from './episode-intent.js';
-import { Sheet, SheetItem, Spinner, chapterLabel, friendlyError, go } from './ui.jsx';
+import { Sheet, SheetItem, Spinner, chapterLabel, friendlyError, go, Loading } from './ui.jsx';
 import { readStory, storyKey, writeStory } from './story-state.js';
 import { InlineEpisodesSection } from './inline-episodes.jsx';
 import './episodes.css';
@@ -369,7 +369,7 @@ export function EpisodesSheet({ account, scope, characterName, currentTitle, dra
             {mode === 'list' && <>
                 {/* The 正文 and the lines copied from it, as a main story and its branches: each a separate story, one tap away. */}
                 <section class="tl-episode-section tl-episode-tree"><h3>正文与番外、平行线</h3>
-                    {graph === null && <p class="tl-muted">正在加载…</p>}
+                    {graph === null && <Loading label="正在读这个故事里的线…" />}
                     {graph && !graph.complete && <p class="tl-muted">有些故事还没读到，列表可能不全</p>}
                     {candidates.length > 5 && <input class="tl-input" type="search" aria-label="搜索标题" placeholder="搜索标题" value={query} onInput={e => setQuery(e.currentTarget.value)} />}
                     <div class="tl-episode-list-row" data-depth="0">

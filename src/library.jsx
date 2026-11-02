@@ -9,8 +9,6 @@ import { Avatar, ConfirmSheet, GroupCover, Sheet, SheetItem, chapterLabel, go, p
 const FAVORITES = '★ 收藏';
 
 const ACCEPT = api.IMPORT_TYPES.map(t => `.${t}`).join(',');
-// The Chinese sample character (sample.js, loaded only when added).
-const SAMPLE_NAME = '林小满';
 
 function ContinueCard({ entry, character, group, user, onOpenGroup, onMenu, primary }) {
     const open = () => group ? onOpenGroup(group) : go({ name: 'chat', avatar: character.avatar, file: api.chatId(entry.file_name) });
@@ -63,10 +61,24 @@ function BookCard({ character, onMenu }) {
     );
 }
 
-export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter }) {
-    const [characters, setCharacters] = useState(null);
-    const [groups, setGroups] = useState([]);
-    const [recent, setRecent] = useState([]);
+// The shelf as last read, so coming back from a story draws it at once while it is read anew. Memory only, per account.
+let lastShelf = null;
+
+/** Grey cards in the shape of the shelf while it is first read. */
+function ShelfSkeleton() {
+    return (
+        <div class="tl-skeleton-shelf" role="status" aria-label="正在加载书架">
+            <div class="tl-skeleton tl-skeleton-continue" />
+            <div class="tl-grid">{[0, 1, 2, 3].map(i => <div class="tl-skeleton tl-skeleton-book" key={i} />)}</div>
+        </div>
+    );
+}
+
+export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter, onThemes }) {
+    const cached = lastShelf?.account === user.handle ? lastShelf : null;
+    const [characters, setCharacters] = useState(cached?.characters ?? null);
+    const [groups, setGroups] = useState(cached?.groups ?? []);
+    const [recent, setRecent] = useState(cached?.recent ?? []);
     const [query, setQuery] = useState('');
     const [tag, setTag] = useState('');
     const [error, setError] = useState('');
@@ -82,6 +94,7 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
 
     const load = () => Promise.all([api.getCharacters(), api.getRecentChats(20), api.getGroups()])
         .then(([list, recentChats, groupList]) => {
+            lastShelf = { account: user.handle, characters: list, recent: recentChats, groups: groupList };
             setCharacters(list);
             setRecent(recentChats);
             setGroups(groupList);
@@ -178,26 +191,12 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
         })
         .slice(0, 4);
     const empty = characters !== null && characters.length === 0 && groups.length === 0;
-    const hasSample = (characters ?? []).some(c => c.name === SAMPLE_NAME);
-    // Offered on the shelf while it holds nothing but the app's bundled (English) characters.
-    const offerSample = characters !== null && !hasSample && characters.every(c => String(c.avatar ?? '').startsWith('default_'));
-    const addSample = async () => {
-        setAdding(false);
-        setImporting(true);
-        try {
-            const avatar = await (await import('./sample.js')).addSample();
-            go({ name: 'chat', avatar, file: '', fresh: true });
-        } catch (e) {
-            notify(e.message);
-        } finally {
-            setImporting(false);
-        }
-    };
 
     return (
         <main class="tl-library">
             <header class="tl-header">
                 <h1 class="tl-title">轻酒馆</h1>
+                <button class="tl-ghost tl-aa tl-theme-entry" aria-label="换主题" title="换主题" onClick={onThemes}>Aa</button>
                 <span class="tl-spacer" />
                 <button class="tl-button" disabled={importing} onClick={() => setAdding(true)}>{importing ? '正在导入…' : '＋ 添加角色'}</button>
                 <button class="tl-button tl-me-button" onClick={() => go({ name: 'me' })}>
@@ -214,7 +213,7 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
                     <span class="tl-card-action">去设置</span>
                 </button>
             )}
-            {characters === null && !error && <p class="tl-muted">正在加载…</p>}
+            {characters === null && !error && <ShelfSkeleton />}
             {empty && (
                 <section class="tl-empty">
                     <h2 class="tl-section-title">书架空空的</h2>
@@ -235,13 +234,6 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
                         ))}
                     </div>
                 </section>
-            )}
-            {/* While the shelf holds only the app's bundled (English) characters, the sample is the first thing to try. */}
-            {offerSample && (
-                <button class="tl-card tl-offer" disabled={importing} onClick={addSample}>
-                    <strong>试试中文示例角色「{SAMPLE_NAME}」</strong>
-                    <span class="tl-card-snippet">雨巷旧书店的店主，温和爱聊天</span>
-                </button>
             )}
             {!empty && characters !== null && (
                 <input class="tl-input tl-search" type="search" placeholder="搜索角色或标签" value={query} onInput={e => setQuery(e.currentTarget.value)} />
@@ -280,7 +272,6 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
                 <Sheet title="添加角色" onClose={() => setAdding(false)}>
                     <SheetItem label="导入角色卡" hint="PNG、JSON 文件，可多选" onClick={() => { setAdding(false); fileInput.current?.click(); }} />
                     <SheetItem label="自己写一个角色" hint="填名字、设定和开场白" onClick={() => go({ name: 'edit', avatar: '' })} />
-                    {!hasSample && <SheetItem label={`添加示例角色「${SAMPLE_NAME}」`} hint="可以直接聊，也能参考写法" onClick={addSample} />}
                 </Sheet>
             )}
             {menu && (

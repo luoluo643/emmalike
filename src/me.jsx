@@ -151,7 +151,7 @@ export function MePage({ user, eng, notify, onOpenReading, onOpenCss, onOpenTool
             <section class="tl-section">
                 <h2 class="tl-section-title">设置与扩展</h2>
                 <div class="tl-list">
-                    <Item label="设置与扩展" hint="世界书、预设、扩展的面板、原版设置" onClick={onOpenTools} />
+                    <Item label="设置与扩展" hint="世界书、预设、正则、扩展的面板、原版设置" onClick={onOpenTools} />
                     <Item label="加载的扩展（仅本机）"
                         hint={engine.skippedExtensions().length
                             ? `已关掉 ${engine.skippedExtensions().length} 个`

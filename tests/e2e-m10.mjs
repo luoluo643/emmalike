@@ -1,4 +1,4 @@
-// 0.11.0 acceptance (second newcomer review): the Chinese sample character and numbered stories ("第 N 个故事"
+// 0.11.0 acceptance (second newcomer review): numbered stories ("第 N 个故事"
 // instead of a file date), Latin text not justified, choice lists in sheets full width, 中转站 / 默认 instead of the
 // app's terms, personas created and edited in the shell, a character's name and picture changed in the editor
 // (its stories follow the new name), 高级设置 without what the shell already has, 我的 regrouped, and 开始使用 with
@@ -81,28 +81,13 @@ const toast = text => page.waitForFunction(t => window.__tlToasts.some(x => x.in
 const chapterTitle = () => page.locator('.tl-chapter').innerText();
 const listChats = async avatar => (await (await post('/api/characters/chats', { avatar_url: avatar })).json().catch(() => [])) ?? [];
 
-// --- The Chinese sample character, and numbered stories ------------------------------------------------------------
-const sampleBefore = (await (await post('/api/characters/all', {})).json()).filter(c => c.name === '林小满').map(c => c.avatar);
+// --- 添加, and numbered stories ------------------------------------------------------------------------------------
 await page.goto(appUrl);
 await page.locator('.tl-character').first().waitFor();
 await page.getByRole('button', { name: '＋ 添加角色', exact: true }).click();
-const addItem = sheet('添加角色').getByRole('button', { name: /^添加示例角色/ });
-check('添加 offers the sample while the shelf has none', sampleBefore.length ? await addItem.count() === 0 : await addItem.count() === 1);
 check('添加 says which files are character cards', (await sheet('添加角色').innerText()).includes('PNG、JSON'));
-if (!sampleBefore.length) {
-    await addItem.click();
-    await page.locator('.tl-composer-input').waitFor({ timeout: 30000 });
-    await synced();
-    const listed = (await (await post('/api/characters/all', {})).json()).find(c => c.name === '林小满');
-    if (listed) made.avatars.push(listed.avatar);
-    const sample = listed ? await (await post('/api/characters/get', { avatar_url: listed.avatar })).json() : null;
-    check('the sample is a Chinese character with a picture', !!sample && sample.first_mes.includes('书') && sample.tags?.includes('示例'), JSON.stringify(sample?.tags));
-    check('adding the sample opens its first story', await page.locator('.tl-chat-title').innerText() === '林小满');
-    await page.waitForFunction(() => document.querySelector('.tl-chapter')?.textContent.includes('第 1 个故事'), null, { timeout: 30000 }).catch(() => { });
-    check('its story is called 第 1 个故事', (await chapterTitle()).includes('第 1 个故事'), await chapterTitle());
-} else {
-    await closeSheet();
-}
+check('添加 offers no sample character', !(await sheet('添加角色').innerText()).includes('示例'));
+await closeSheet();
 
 // A test character with an English greeting, opened in a new story.
 const created = await page.request.post(`${base}/api/characters/create`, {

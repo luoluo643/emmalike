@@ -54,7 +54,7 @@ try {
     await page.getByRole('button', { name: '发送', exact: true }).click();
     await page.locator('[data-pending="true"]').waitFor();
     await page.locator('.tl-composer-input').fill('后来输入的内容');
-    await page.getByRole('button', { name: '改一改', exact: true }).click();
+    await page.getByRole('button', { name: '撤回修改', exact: true }).click();
     check('取回编辑保留后来输入的内容', await page.locator('.tl-composer-input').inputValue() === '后来输入的内容\n取消测试：不应发送');
     await page.screenshot({ path: out + '/pending-restored.png' });
     engineGate.release(); await page.unroute(base + '/'); await synced();
@@ -92,7 +92,7 @@ try {
     while (!queueEntered) await page.waitForTimeout(30);
     await page.locator('.tl-composer-input').fill('桥接队列取消测试');
     await page.getByRole('button', { name: '发送', exact: true }).click();
-    await page.getByRole('button', { name: '取消发送', exact: true }).click();
+    await page.getByRole('button', { name: '撤回修改', exact: true }).click();
     queueGate.release(); await native(w => w.__hold); await page.unroute('**/api/presets/save');
     await page.waitForTimeout(300);
     check('桥接队列取消后也不发送', !await native(w => w.SillyTavern.getContext().chat.some(m => m.mes.includes('桥接队列取消'))));

@@ -38,7 +38,7 @@ function Toggle({ label, on, onChange }) {
  * The "Aa" sheet: theme cards first, then type and spacing. Every change shows at once and is saved without a save
  * button, like a reading app. `onEditTheme(id | null, base)` opens the theme editor.
  */
-export function ReadingSheet({ onClose, onEditTheme }) {
+export function ReadingSheet({ onClose, onEditTheme, onPreviewThemes }) {
     const [reading, setReading] = useState(cachedReading);
     const themes = cachedThemes();
     const latest = useRef(reading);
@@ -108,6 +108,7 @@ export function ReadingSheet({ onClose, onEditTheme }) {
                         <span class="tl-theme-name">自定义</span>
                     </button>
                 </div>
+                {onPreviewThemes && <button class="tl-link" onClick={onPreviewThemes}>全屏预览所有主题</button>}
                 <button class="tl-link" onClick={() => custom ? edit(current.id) : edit(null, reading.theme)}>
                     {custom ? `编辑「${current.name}」的颜色、背景图和 CSS` : `照「${current?.name ?? '纸色'}」做一个自己的主题`}
                 </button>

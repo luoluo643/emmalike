@@ -20,6 +20,7 @@ function authLost() {
     csrfToken = undefined;
     lastRead.character.clear();
     lastRead.chapters.clear();
+    shelfNames.clear();
     dispatchEvent(new Event('tl-auth-required'));
     return new AuthRequired();
 }
@@ -33,7 +34,7 @@ export async function getToken() {
     return csrfToken;
 }
 
-async function request(path, { method = 'POST', body } = {}) {
+async function send(path, { method = 'POST', body } = {}) {
     const response = await fetch(path, {
         method,
         credentials: 'same-origin',
@@ -46,7 +47,11 @@ async function request(path, { method = 'POST', body } = {}) {
         const text = await response.text().catch(() => '');
         throw new Error(text || `操作没成功，再试一次（${response.status}）`);
     }
-    return response.json();
+    return response;
+}
+
+async function request(path, options) {
+    return (await send(path, options)).json();
 }
 
 export async function getCurrentUser() {
@@ -83,11 +88,22 @@ export async function login(handle, password) {
 
 export async function getCharacters() {
     const list = await request('/api/characters/all');
-    return Array.isArray(list) ? list : [];
+    if (!Array.isArray(list)) return [];
+    shelfNames.clear();
+    for (const c of list) if (c?.avatar) shelfNames.set(c.avatar, c.name);
+    return list;
+}
+
+/** The character's name as the shelf or an earlier read last saw it, or null. */
+export function knownName(avatar) {
+    return lastRead.character.get(avatar)?.name ?? shelfNames.get(avatar) ?? null;
 }
 
 // The last character and chapter list read this session, so a page that shows them again (the character page after
 // its story) can draw at once while it reads them anew. Memory only; cleared when the session changes.
+// Names from the last shelf read, so a story can be fetched while its character is still on the way.
+const shelfNames = new Map();
+
 const lastRead = { character: new Map(), chapters: new Map() };
 const remember = (kind, avatar, value) => {
     const map = lastRead[kind];
@@ -331,10 +347,8 @@ export async function setCharacterImage(avatar, image) {
 
 /** Deletes a character and all of its chapters (the full app does the same when it is not running). */
 export async function deleteCharacter(avatar) {
-    await request('/api/characters/delete', { body: { avatar_url: avatar, delete_chats: true } }).catch(error => {
-        // The endpoint answers with an empty body.
-        if (error instanceof AuthRequired || !(error instanceof SyntaxError)) throw error;
-    });
+    // The endpoint returns plain "OK", not JSON. HTTP status determines success; do not parse the body.
+    await send('/api/characters/delete', { body: { avatar_url: avatar, delete_chats: true } });
 }
 
 export function isFavorite(character) {

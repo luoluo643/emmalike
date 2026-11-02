@@ -57,3 +57,17 @@ PROJECT=tlmine ST_PORT=8095 MOCK_PORT=5065 bash tests/run-isolated.sh down
 ## 截图工具
 
 `tests/tools/screens.mjs` 按手机尺寸截关键界面图，可选 `light` 或 `dark`；`tests/tools/make-icons.mjs` 生成应用图标。参数见各文件第一行的注释。
+
+## 删除角色的非 JSON 响应回归
+
+`npm run test:unit` 包含 `delete-character.test.mjs`：删除接口成功时不解析正文，覆盖 200 OK、204、401/403、HTTP 失败、网络失败以及其他 JSON 接口的解析行为。`TL_API_MODULE` 可指向基准副本的 `src/api.js`，验证旧代码能复现模拟的 Safari DOMException；这不是 iPhone 真机验证。
+
+`PROJECT=tldelfixcodex ST_PORT=8098 MOCK_PORT=5068 bash tests/run-isolated.sh e2e-delete-character e2e-busy-feedback` 验证原版引擎未就绪时的删除、失败后重试、确认框关闭和书架刷新。专项只允许独立的 `127.0.0.1:8098`，只创建/删除自己的合成角色。运行前先构建，并确认端口未占用。结束后用相同变量运行 `tests/run-isolated.sh down`。
+
+## 正则草稿的即时保留
+
+node tests/e2e-ui-regex-drafts.mjs 使用真实 Preact 编辑器和合成桥接，检查输入后立即卸载、预设切换后继续输入的归属、保存期间继续输入、失败保留、明确放弃、账号隔离和新建目标恢复。只允许测试页面自己的回环请求，不连接酒馆或模型。支持 CHROME_PATH 和 TEST_OUTPUT。
+
+PROJECT=tlregexdraft ST_PORT=8103 MOCK_PORT=5073 ST_IMAGE=ghcr.io/sillytavern/sillytavern:1.16.0 bash tests/run-isolated.sh e2e-regex-sim e2e-regex 对真实隔离酒馆验证预设切换、390×844 触摸视口、800ms 延迟、40KiB/s 下行、20KiB/s 上行及断网重试。模拟专项仅允许 127.0.0.1:8103。另在 1.19.0 上串行重复；运行前构建、检查端口，结束后同样的 PROJECT/ST_PORT/MOCK_PORT 运行 down。
+
+隔离运行器准备失败立即停止；任一套件失败，运行器最终退出码为 1，即使后续套件通过也不会覆盖失败。npm run test:unit 包含不启动 Docker 的退出码回归测试。包装脚本仍需保留运行器退出码，不能只看 RUN-DONE。

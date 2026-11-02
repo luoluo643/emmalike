@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import * as api from './api.js';
 import * as engine from './engine.js';
-import { Sheet, friendlyError } from './ui.jsx';
+import { Sheet, friendlyError, Loading } from './ui.jsx';
 
 const byLabel = (a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN');
 
@@ -30,7 +30,7 @@ export function SkipExtensionsSheet({ eng, notify, onClose }) {
         <Sheet title="加载的扩展" onClose={onClose}>
             <p class="tl-muted tl-sheet-note">只对本机有效，关掉的不加载、准备更快。会改动发给 AI 内容的扩展，关掉后本机发的消息也会变</p>
             {error && <p class="tl-error" role="alert">{error}</p>}
-            {!list && !error && <p class="tl-muted tl-sheet-note">正在加载…</p>}
+            {!list && !error && <Loading sheet />}
             {items.map(x => {
                 const off = !!accountOff?.includes(x.name);
                 return (

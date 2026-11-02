@@ -1,0 +1,23 @@
+// Probe: does writing a regex script into the preset change how many differences the preset page reports?
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_CORE ?? 'playwright-core');
+const [base, handle = 'default-user', password = 'test1234'] = process.argv.slice(2);
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
+const page = await (await browser.newContext()).newPage();
+const { token } = await (await page.request.get(`${base}/csrf-token`)).json();
+await page.request.post(`${base}/api/users/login`, { headers: { 'X-CSRF-Token': token }, data: { handle, password } });
+await page.goto(`${base}/scripts/extensions/third-party/emmalike/app/#preset`);
+await page.locator('.tl-preset-savebar').waitFor({ timeout: 240000 });
+const count = () => page.evaluate(async () => { const b = document.querySelector('iframe.engine').contentWindow.TavernLiteBridge; return (await b.presetEditorState({ fresh: true })).changes.map(c => c.label); });
+const before = await count();
+const r = await page.evaluate(async () => { const b = document.querySelector('iframe.engine').contentWindow.TavernLiteBridge, s = b.regexEditorState();
+    const saved = await b.regexSave({ group: 'preset', id: '', script: { scriptName: 'probe', findRegex: '/x/g', placement: [2], markdownOnly: true }, owner: s.owner });
+    return saved.id; });
+await page.waitForTimeout(1500);
+const after = await count();
+await page.evaluate(async id => { const b = document.querySelector('iframe.engine').contentWindow.TavernLiteBridge, s = b.regexEditorState(); await b.regexDelete({ group: 'preset', items: [{ id }], owner: s.owner }); }, r);
+await page.waitForTimeout(1500);
+const end = await count();
+console.log(JSON.stringify({ before: before.length, after: after.length, end: end.length, added: after.filter(x => !before.includes(x)), sample: before.slice(0, 5) }));
+await browser.close();

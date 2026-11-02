@@ -73,6 +73,11 @@
         overscroll-behavior-y: none;
     }
 
+    /* Only the page gets the colour: a body background would be painted over body::before (the background picture). */
+    body {
+        background: transparent;
+    }
+
     body::before {
         content: "";
         position: fixed;
@@ -119,6 +124,138 @@
 
     .tl-button:active, .tl-ghost:active, .tl-round:active, .tl-card:active {
         transform: scale(0.97);
+    }
+
+    /* The shelf's theme entry sits in the title's corner, out of the way of whatever a theme does with the buttons. */
+    .tl-library > .tl-header { position: relative; }
+    .tl-library > .tl-header > .tl-theme-entry {
+        position: absolute;
+        z-index: 21;
+        top: calc(max(10px, env(safe-area-inset-top)) - 6px);
+        right: -6px;
+    }
+    @media (min-width: 421px) {
+        .tl-library > .tl-header { padding-right: 48px; }
+    }
+
+    /* Theme picker: the app behind shows the theme; only the bars and the strip sit on top, like choosing a wallpaper. */
+    .tl-picker {
+        position: fixed;
+        inset: 0;
+        z-index: 70;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        outline: none;
+        animation: tl-sheet-in 0.2s ease-out;
+    }
+    .tl-picker-bar, .tl-picker-dock {
+        background: color-mix(in srgb, var(--tl-bg) 72%, transparent);
+        backdrop-filter: blur(16px) saturate(1.1);
+        -webkit-backdrop-filter: blur(16px) saturate(1.1);
+        color: var(--tl-text);
+    }
+    .tl-picker-bar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        padding: max(10px, env(safe-area-inset-top)) 12px 10px;
+        box-shadow: 0 1px 0 color-mix(in srgb, var(--tl-text) 10%, transparent);
+    }
+    .tl-picker-title { display: grid; justify-items: center; line-height: 1.3; min-width: 0; }
+    .tl-picker-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+    .tl-picker-title span { font-size: 0.75em; color: var(--tl-text-muted); }
+    .tl-picker-stage { position: relative; min-height: 0; touch-action: pan-y; }
+    .tl-picker-arrow {
+        position: absolute;
+        top: 50%;
+        z-index: 2;
+        width: 44px;
+        height: 44px;
+        margin-top: -22px;
+        display: grid;
+        place-items: center;
+        color: var(--tl-text);
+        border: 0;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--tl-bg) 60%, transparent);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        cursor: pointer;
+    }
+    .tl-picker-arrow[data-side="left"] { left: 8px; }
+    .tl-picker-arrow[data-side="right"] { right: 8px; }
+    .tl-picker-arrow:disabled { opacity: 0; pointer-events: none; }
+    .tl-picker-dock {
+        display: grid;
+        gap: 8px;
+        padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+        box-shadow: 0 -1px 0 color-mix(in srgb, var(--tl-text) 10%, transparent);
+    }
+    .tl-picker-modes {
+        justify-self: center;
+        display: flex;
+        padding: 3px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--tl-text) 8%, transparent);
+    }
+    .tl-picker-modes button {
+        min-height: 36px;
+        padding: 0 16px;
+        font: inherit;
+        font-size: 0.85em;
+        color: var(--tl-text-muted);
+        background: transparent;
+        border: 0;
+        border-radius: 999px;
+        cursor: pointer;
+    }
+    .tl-picker-modes button[aria-checked="true"] { color: var(--tl-text); background: var(--tl-bg); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+    .tl-picker-strip { padding-bottom: 2px; }
+    .tl-picker-hint { margin: 0; text-align: center; font-size: 0.75em; color: var(--tl-text-muted); }
+    /* The sample story fills the stage; the page behind is hidden so only the theme's own background shows. */
+    .tl-app:has(> .tl-picker[data-sample="true"]) > :not(.tl-picker) { visibility: hidden; }
+    .tl-picker-story { position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .tl-picker-story .tl-messages { flex: 1; padding-top: 18px; overflow-y: auto; }
+    .tl-picker-story .tl-composer { pointer-events: none; }
+    .tl-picker-placeholder { display: block; color: var(--tl-text-muted); }
+
+    /* Placeholders in the shape of what is loading; they shimmer unless motion is reduced. */
+    .tl-skeleton {
+        border-radius: var(--tl-radius);
+        background: linear-gradient(90deg, color-mix(in srgb, var(--tl-text) 7%, transparent) 30%, color-mix(in srgb, var(--tl-text) 13%, transparent) 50%, color-mix(in srgb, var(--tl-text) 7%, transparent) 70%) 0 0 / 300% 100%;
+        animation: tl-shimmer 1.4s ease-in-out infinite;
+    }
+
+    @keyframes tl-shimmer {
+        from { background-position: 100% 0; }
+        to { background-position: 0 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .tl-skeleton { animation: none; }
+    }
+
+    .tl-skeleton-shelf { display: grid; gap: 18px; }
+    .tl-loading > .tl-muted { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
+    .tl-loading-story { padding-top: 2.4em; }
+    .tl-loading-story .tl-skeleton-line { height: calc(var(--tl-font-size) * 0.9); margin: calc(var(--tl-font-size) * 0.9) 0; }
+    .tl-skeleton-continue { height: 96px; }
+    .tl-skeleton-book { aspect-ratio: 2 / 3.4; }
+    .tl-skeleton-line { height: 1em; margin: 0.6em 0; border-radius: 6px; }
+    .tl-skeleton-line:nth-child(3n) { width: 72%; }
+
+    /* Everything tappable answers the finger at once, before whatever it opens is ready. */
+    html {
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    :is(.tl-ghost, .tl-sheet-item, .tl-list-item, .tl-chip, .tl-chapter-row, .tl-reader-title, .tl-message-menu, .tl-swipe-button, .tl-continue-writing, .tl-link):not(:disabled):active {
+        background-color: color-mix(in srgb, var(--tl-text) 12%, transparent);
+    }
+
+    :is(.tl-button, .tl-card, .tl-character):not(:disabled):active {
+        filter: brightness(0.94);
     }
 
     /* Icon-only buttons in bars: no box, just the icon. */
@@ -701,9 +838,6 @@
         opacity: 0.75;
     }
 
-    .tl-message[data-pending="true"] {
-        opacity: 0.6;
-    }
 
     /* Your own lines read like notes in the margin of the story. */
     .tl-message[data-role="user"] {
@@ -1876,6 +2010,27 @@
         line-height: 1.6;
     }
 
+    /* A question from the full app, asked again in the shell: its words as written, long ones scroll. */
+    .tl-native-popup-text {
+        white-space: pre-line;
+        overflow-wrap: anywhere;
+        max-height: 45vh;
+        overflow-y: auto;
+    }
+
+    .tl-native-popup-field {
+        display: grid;
+        gap: 6px;
+    }
+
+    .tl-native-popup-more {
+        justify-self: start;
+        height: 36px;
+        padding: 0 4px;
+        font-size: 0.85em;
+        color: var(--tl-text-muted);
+    }
+
     .tl-danger {
         background: var(--tl-danger);
         border-color: var(--tl-danger);
@@ -2436,8 +2591,7 @@
         background: color-mix(in srgb, var(--tl-accent) 10%, var(--tl-surface));
     }
 
-    .tl-setup-banner .tl-card-snippet,
-    .tl-offer .tl-card-snippet {
+    .tl-setup-banner .tl-card-snippet {
         white-space: normal;
     }
 
@@ -2457,34 +2611,22 @@
         color: var(--tl-accent-text);
     }
 
-    .tl-offer {
-        display: grid;
-        gap: 4px;
-        width: 100%;
-        text-align: left;
-        margin-bottom: 12px;
+    /* A same-floor card's story: one line above its interface says the rest is folded. */
+    .tl-same-floor-note {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: center;
+        gap: 4px 10px;
+        margin: 4px var(--tl-page-margin) 12px;
+        font-size: 0.85em;
+        color: var(--tl-text-muted);
+        text-align: center;
     }
 
     .tl-setup-bar {
         width: calc(100% - 24px);
         margin: 0 12px 8px;
-    }
-
-    .tl-check-row {
-        display: flex;
-        align-items: flex-start;
-        gap: 10px;
-        margin: 14px 0 4px;
-        line-height: 1.5;
-        cursor: pointer;
-    }
-
-    .tl-check-row input {
-        flex: none;
-        width: 20px;
-        height: 20px;
-        margin: 2px 0 0;
-        accent-color: var(--tl-accent);
     }
 
     .tl-setup .tl-section .tl-input {

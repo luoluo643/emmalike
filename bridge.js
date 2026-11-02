@@ -24,6 +24,7 @@ import { supportedNativeVersion } from './bridge-native-settle.js';
 import { scanExtensions } from './bridge-extension-scan.js';
 import { createNativeWorldEditor } from './bridge-world-editor-native.js';
 import { createNativePresetEditor } from './bridge-preset-editor-native.js';
+import { createNativeRegexEditor } from './bridge-regex-editor-native.js';
 import { LINES_KEY, LINE_FIELD, ownState, planLineAction } from './src/own-lines.js';
 import { lineDirective } from './src/inline-episodes.js';
 
@@ -1353,20 +1354,59 @@ const FLOAT_MAX_SHARE = 0.4;
 let overlayOn = false;
 let floatObserver;
 
+// A screen-sized layer that lets touches through is a stage for smaller ones, as a script's shadow-DOM host often is
+// (a card's floating button): the parts on it that take touches count instead, at whatever size they are
+// (an opened phone covers the screen on purpose). Only so many elements are looked at per stage.
+const STAGE_SCAN_MAX = 400;
+
+function stageParts(stage) {
+    const parts = [];
+    const small = innerWidth * innerHeight * FLOAT_MAX_SHARE;
+    let seen = 0;
+    const visit = node => {
+        for (const child of [...(node.shadowRoot?.children ?? []), ...node.children]) {
+            if (++seen > STAGE_SCAN_MAX) return;
+            if (!isRendered(child)) continue;
+            const r = child.getBoundingClientRect(), area = r.width * r.height, style = getComputedStyle(child);
+            if (style.pointerEvents !== 'none' && area > 0) {
+                parts.push(r);
+                // What hangs over a small part's edge shows too (a badge on a button's corner).
+                if (area < small) for (const inner of child.children) {
+                    if (!isRendered(inner)) continue;
+                    const o = inner.getBoundingClientRect();
+                    if (o.width * o.height > 0 && (o.left < r.left || o.top < r.top || o.right > r.right || o.bottom > r.bottom)) parts.push(o);
+                }
+            }
+            // A note that only shows, without taking touches ("done" beside a button): it has words on it and is small.
+            else if (area > 0 && area < small && !child.children.length && child.textContent.trim() && style.visibility === 'visible' && (Number(style.opacity) > 0 || child.getAnimations().length)) parts.push(r);
+            else visit(child);
+        }
+    };
+    visit(stage);
+    return parts;
+}
+
+/** The page's floating layers and the rectangles of each that show and take touches. */
 function floatingElements() {
     const area = innerWidth * innerHeight;
-    return [...document.body.children].filter(el => {
-        if (appChildren.has(el) || el.hasAttribute('data-tl-not-float')) return false;
-        if (/^(SCRIPT|STYLE|LINK|TEMPLATE|DIALOG)$/.test(el.tagName)) return false;
-        if (el.id === 'toast-container' || el.classList.contains('popup') || !isRendered(el)) return false;
-        if (getComputedStyle(el).position !== 'fixed') return false;
+    return [...document.body.children].flatMap(el => {
+        if (appChildren.has(el) || el.hasAttribute('data-tl-not-float')) return [];
+        if (/^(SCRIPT|STYLE|LINK|TEMPLATE|DIALOG)$/.test(el.tagName)) return [];
+        if (el.id === 'toast-container' || el.classList.contains('popup') || !isRendered(el)) return [];
+        const style = getComputedStyle(el);
+        if (style.position !== 'fixed') return [];
         const r = el.getBoundingClientRect();
-        return r.width * r.height > 0 && r.width * r.height < area * FLOAT_MAX_SHARE;
+        if (!(r.width * r.height > 0)) return [];
+        if (r.width * r.height < area * FLOAT_MAX_SHARE) return [{ el, rects: [r] }];
+        // A dialog the shell asks itself (engine.nativePopup) is never laid over it.
+        if (style.pointerEvents !== 'none' || el.querySelector('dialog, [aria-modal="true"]')) return [];
+        const rects = stageParts(el);
+        return rects.length ? [{ el, rects }] : [];
     });
 }
 
 function floatingLayers() {
-    const elements = floatingElements();
+    const layers = floatingElements(), elements = layers.map(layer => layer.el);
     for (const el of document.body.children) {
         const floating = elements.includes(el);
         if (floating !== el.hasAttribute('data-tl-float')) el.toggleAttribute('data-tl-float', floating);
@@ -1374,16 +1414,22 @@ function floatingLayers() {
     floatObserver?.disconnect();
     floatObserver = new MutationObserver(reportFloats);
     for (const el of document.body.children) {
-        if (!appChildren.has(el)) floatObserver.observe(el, { attributes: true, attributeFilter: ['style', 'hidden', 'class'] });
+        if (appChildren.has(el)) continue;
+        floatObserver.observe(el, { attributes: true, attributeFilter: ['style', 'hidden', 'class'] });
+        watchGlides(el);
+        // What a stage shows changes inside it (a button dragged, a phone opened), often in its shadow root.
+        if (el.shadowRoot) {
+            floatObserver.observe(el.shadowRoot, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'hidden', 'class'] });
+            watchGlides(el.shadowRoot);
+        }
     }
-    return elements.map(el => {
-        const r = el.getBoundingClientRect();
-        return { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
-    });
+    return layers.flatMap(layer => layer.rects).map(r =>
+        ({ x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }));
 }
 
 let floatsTimer;
 let lastFloats = '';
+let lastRects = [];
 function reportFloats() {
     clearTimeout(floatsTimer);
     floatsTimer = setTimeout(() => {
@@ -1391,8 +1437,38 @@ function reportFloats() {
         const text = JSON.stringify(rects);
         if (text === lastFloats) return;
         lastFloats = text;
+        lastRects = rects;
         emit('floats', rects);
     }, 30);
+}
+
+// A layer that glides (a button snapping to the screen's edge) changes its style once and then moves on its own, so
+// its place is followed until the transition ends. Not while a layer fills the screen: its cut-out cannot change.
+const GLIDES = /^(transform|translate|scale|left|top|right|bottom|width|height|margin)/;
+const GLIDE_FOLLOW_MS = 1000;
+const GLIDE_STEP_MS = 60;
+let glideUntil = 0;
+let glideTimer = 0;
+const followGlide = event => {
+    if (!GLIDES.test(event.propertyName) || lastRects.some(coversScreen)) return;
+    if (event.type !== 'transitionrun') {
+        reportFloats();
+        return;
+    }
+    glideUntil = Date.now() + GLIDE_FOLLOW_MS;
+    glideTimer ||= setInterval(() => {
+        reportFloats();
+        if (Date.now() < glideUntil) return;
+        clearInterval(glideTimer);
+        glideTimer = 0;
+    }, GLIDE_STEP_MS);
+};
+const coversScreen = r => r.width * r.height >= innerWidth * innerHeight * 0.9;
+const glideWatched = new WeakSet();
+function watchGlides(target) {
+    if (glideWatched.has(target)) return;
+    glideWatched.add(target);
+    for (const type of ['transitionrun', 'transitionend', 'transitioncancel']) target.addEventListener(type, followGlide);
 }
 
 function watchFloats() {
@@ -1418,6 +1494,14 @@ function pointerAt(x, y) {
     if (!overlayOn) return;
     const target = document.elementFromPoint(x, y) ?? document.body;
     target.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, bubbles: true, composed: true, pointerType: 'touch', isPrimary: true }));
+}
+
+/**
+ * The back gesture while a floating layer fills the screen. A layer that can step back listens for `float-back` on the
+ * document and calls preventDefault(); a real Escape key is no use here, the full app also stops the reply on it.
+ */
+function floatBack() {
+    return !document.dispatchEvent(new Event('float-back', { cancelable: true }));
 }
 
 // Model switching: the Connection Manager's profiles (API, model, preset… saved together) and the current API's
@@ -2566,6 +2650,20 @@ const worldEditor = createNativeWorldEditor({
 const presetEditor = createNativePresetEditor({
     account: nativeAccount, st, openai, presetManager, ctx, enqueue, verifyAccount, assertSession: assertBridgeSession,
 });
+const regexEditor = createNativeRegexEditor({
+    account: nativeAccount, regexEngine, extensions, st, groupChats, ctx, uuid: () => utils.uuidv4(),
+    enqueue, waitIdle, verifyAccount, assertSession: assertBridgeSession, waitFor,
+});
+
+// The app's regex panel (in its extensions panel), opened and scrolled to.
+function openRegexPanel() {
+    const drawer = document.querySelector('#regex_container .inline-drawer');
+    if (!drawer || !openPanel('extensions')) return false;
+    const content = drawer.querySelector(':scope > .inline-drawer-content');
+    if (content && getComputedStyle(content).display === 'none') drawer.querySelector(':scope > .inline-drawer-toggle')?.click();
+    setTimeout(() => drawer.scrollIntoView({ block: 'start' }), 400);
+    return true;
+}
 
 attach();
 
@@ -2665,6 +2763,8 @@ window.TavernLiteBridge = Object.freeze({
     setWorldBookCharacter,
     ...worldEditor,
     ...presetEditor,
+    ...regexEditor,
+    openRegexPanel,
     worldBook,
     saveWorldEntry,
     addWorldEntry,
@@ -2700,6 +2800,7 @@ window.TavernLiteBridge = Object.freeze({
     floatingLayers,
     setOverlay,
     pointerAt,
+    floatBack,
     extensionSettings: () => ctx().extensionSettings,
     saveSettings: () => ctx().saveSettingsDebounced(),
 });

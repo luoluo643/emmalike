@@ -6,6 +6,19 @@
 //   taps and input in the mirror are replayed on the real panel in the full app, which then updates the mirror.
 import * as engine from './engine.js';
 
+// The shell's copy of a card keeps running while the full app shows its own, so what the reader did in it is still there
+// afterwards. Same-origin pages can hear each other, though: a status bar that freezes when a "newer" copy announces
+// itself over a BroadcastChannel would be frozen for good by the full app's copy starting up. So the shell's copies get
+// channels of their own.
+const OWN_CHANNELS = `<script>(function () {
+    var Channel = window.BroadcastChannel, PREFIX = 'tl-shell:';
+    if (!Channel) return;
+    window.BroadcastChannel = class extends Channel {
+        constructor(name) { super(PREFIX + name); }
+        get name() { return super.name.slice(PREFIX.length); }
+    };
+})();<\/script>`;
+
 // What Tavern Helper's card pages read from window.parent (its iframe predefine script and helpers).
 const FORWARDED = ['_', 'EjsTemplate', 'TavernHelper', 'YAML', 'showdown', 'z', 'SillyTavern', 'Mvu', '$', 'jQuery'];
 const LAZY_MARGIN = '800px 0px';
@@ -80,7 +93,7 @@ function startCard(slot) {
     // own frame for the same card (its listeners are kept per frame name).
     frame.id = frame.name = `${slot.dataset.frame}_${++serial}`;
     frame.title = '前端卡片';
-    frame.srcdoc = source;
+    frame.srcdoc = source.replace(/<head[^>]*>/i, head => head + OWN_CHANNELS);
     slot.append(frame);
 }
 

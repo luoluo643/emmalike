@@ -17,11 +17,11 @@ import { MePage } from './me.jsx';
 import { ModelSheet } from './model.jsx';
 import { giveLetterPicture } from './persona.jsx';
 import { Reader } from './reader.jsx';
-import { setAppearanceAccount, syncAppearanceWithAccount } from './theme.js';
+import { refreshBootLook, setAppearanceAccount, syncAppearanceWithAccount } from './theme.js';
 import { ThemeEditor } from './theme-editor.jsx';
 import { CharacterEditor } from './editor.jsx';
 import { ToolsSheet } from './tools.jsx';
-import { Spinner, friendlyError, go, goBack, parseHash, routeHash, storage, trackProgress, useBackLayer, useEngine, useProgress, wasLayerPop } from './ui.jsx';
+import { NativePopupSheet, Spinner, friendlyError, go, goBack, parseHash, routeHash, storage, trackProgress, useBackLayer, useEngine, useProgress, wasLayerPop } from './ui.jsx';
 import { WorkPage } from './work.jsx';
 import { fitIphoneHomeScreen } from './ios-standalone.js';
 
@@ -31,6 +31,7 @@ const PAGES = {
     worlds: () => import('./world-editor.jsx').then(m => m.WorldsPage),
     world: () => import('./world-editor.jsx').then(m => m.WorldBookPage),
     preset: () => import('./preset-editor.jsx').then(m => m.PresetPage),
+    regex: () => import('./regex-editor.jsx').then(m => m.RegexPage),
 };
 
 function Lazy({ page, ...props }) {
@@ -38,7 +39,16 @@ function Lazy({ page, ...props }) {
     useEffect(() => {
         PAGES[page]().then(p => setPage(() => p)).catch(() => props.notify('页面没加载出来，检查网络后刷新'));
     }, [page]);
-    return Page ? <Page {...props} /> : <div class="tl-boot">正在打开…</div>;
+    return Page ? <Page {...props} /> : <div class="tl-boot" role="status"><span><Spinner /> 正在打开…</span></div>;
+}
+
+/** The full-screen theme picker, loaded the first time it opens. */
+function ThemePickerSheet(props) {
+    const [Picker, setPicker] = useState(null);
+    useEffect(() => {
+        import('./theme-picker.jsx').then(m => setPicker(() => m.ThemePicker)).catch(() => props.onClose());
+    }, []);
+    return Picker ? <Picker {...props} /> : null;
 }
 
 function App() {
@@ -53,6 +63,7 @@ function App() {
     const [sheet, setSheet] = useState(null);
     const [toasts, setToasts] = useState([]);
     const [popupWaiting, setPopupWaiting] = useState(false);
+    const [nativeAsk, setNativeAsk] = useState(null);
     const progress = useProgress();
     const eng = useEngine();
     const autoShown = useRef(false);
@@ -61,8 +72,9 @@ function App() {
     const deferred = useRef([]);
 
     const notify = useCallback((text, level = 'error') => {
-        const id = Math.random();
-        setToasts(list => [...list.slice(-2), { id, text: level === 'error' ? friendlyError(text) : text, level }]);
+        const id = Math.random(), shown = level === 'error' ? friendlyError(text) : text;
+        // The same words again replace the earlier line instead of stacking under it.
+        setToasts(list => [...list.filter(t => t.text !== shown).slice(-2), { id, text: shown, level }]);
         setTimeout(() => setToasts(list => list.filter(t => t.id !== id)), level === 'error' ? 8000 : 4000);
     }, []);
     useEffect(() => installCardHost(notify), [notify]);
@@ -130,7 +142,7 @@ function App() {
             const target = parseHash(), ticket = ++navigation, previous = shownRoute.current;
             const bridge = engine.getBridge();
             if (previous.name === 'chat' && routeHash(previous) !== routeHash(target) && bridge?.episodeNavigationGuard) {
-                try { await bridge.episodeNavigationGuard(target.name === 'chat' ? { avatar: target.avatar, file: target.file } : null); }
+                try { await trackProgress('正在确认这段故事已存好…', bridge.episodeNavigationGuard(target.name === 'chat' ? { avatar: target.avatar, file: target.file } : null)); }
                 catch (error) {
                     if (ticket === navigation) {
                         history.replaceState({ tavernLite: true }, '', routeHash(previous));
@@ -229,6 +241,13 @@ function App() {
         }).catch(() => { });
     }, []);
 
+    const openRegexNative = useCallback(() => {
+        withBridge('打开正则', bridge => {
+            if (!(bridge.openRegexPanel?.() ?? bridge.openPanel('extensions'))) throw new Error('这个版本的酒馆里找不到正则');
+            showNative(true);
+        }).catch(() => { });
+    }, []);
+
     const editCharacter = useCallback(avatar => {
         withBridge('打开角色编辑', bridge => bridge.editCharacter(avatar).then(() => showNative(true))).catch(() => { });
     }, []);
@@ -236,6 +255,30 @@ function App() {
     const editInNative = useCallback(index => {
         withBridge('打开编辑器', bridge => bridge.editMessage(index).then(() => showNative(true))).catch(() => { });
     }, []);
+
+    // A plain question from the full app (see engine.nativePopup) is asked again in the shell; true when it is.
+    const askHere = () => {
+        const popup = engine.nativePopup();
+        if (!popup?.simple) return false;
+        setPopupWaiting(false);
+        setNativeAsk(popup);
+        return true;
+    };
+    const answerNativeAsk = (values, index) => {
+        const answered = engine.answerNativePopup(nativeAsk.id, values, index);
+        setNativeAsk(null);
+        // A dialog under the answered one was announced while hidden: it is asked next. The answered one may
+        // also have closed by itself meanwhile, when this one is asked again in its current state.
+        setTimeout(() => {
+            if (engine.isNativeVisible() || askHere()) return;
+            if (engine.nativePopup()) setPopupWaiting(true);
+        }, answered ? 300 : 0);
+    };
+    // Leaving the shell's copy unanswered still leaves the app waiting: the bar stays to show the original.
+    const leaveNativeAsk = () => {
+        setNativeAsk(null);
+        if (engine.nativePopup()) setPopupWaiting(true);
+    };
 
     // A dialog in the full app only takes over the screen when something the user started is waiting on it;
     // otherwise a bar offers to show it, so reading is never interrupted.
@@ -247,6 +290,8 @@ function App() {
             notify(explained ?? detail.text, detail.level);
         }
         if (type === 'popup' && !engine.isNativeVisible()) {
+            // A plain question is answered right here, whether or not something waits on it.
+            if (!detail?.text && askHere()) return;
             if (readerPending.current || deferred.current.length) {
                 autoShown.current = true;
                 showNative(true);
@@ -256,6 +301,7 @@ function App() {
             }
         }
         if (type === 'popup-closed') {
+            setNativeAsk(null);
             setPopupWaiting(false);
             if (autoShown.current) {
                 autoShown.current = false;
@@ -283,8 +329,20 @@ function App() {
     // The phone's back gesture leaves the full app's view first.
     useBackLayer(nativeVisible, () => { autoShown.current = false; showNative(false); });
 
+    // A floating layer that fills the screen (a card's phone) answers it too, one step at a time. One that does not
+    // take it is left alone: the gesture goes on to the page, and the layer goes away with the story.
+    const [floatCover, setFloatCover] = useState(false);
+    useEffect(() => engine.onEngine((type, detail) => { if (type === 'float-cover') setFloatCover(detail); }), []);
+    useEffect(() => engine.setFloatsAllowed(route.name === 'chat'), [route.name]);
+    useBackLayer(floatCover, () => {
+        setFloatCover(false);
+        // A layer stepping back may be on its way out, so it is looked at again a little later.
+        if (engine.floatBack()) setTimeout(() => setFloatCover(engine.floatsCovering()), 400);
+        else setTimeout(() => history.back());
+    });
+
     if (fatal) return <main class="tl-login"><p class="tl-error">{fatal}</p><button class="tl-button" onClick={() => location.reload()}>重试</button></main>;
-    if (user === undefined) return <div class="tl-boot">正在打开…</div>;
+    if (user === undefined) return <div class="tl-boot" role="status"><span><Spinner /> 正在打开…</span></div>;
 
     const openTools = () => setSheet('tools');
     const editTheme = (id, base) => go({ name: 'theme', id: id ?? '', base: base ?? '' });
@@ -294,7 +352,7 @@ function App() {
         <div class="tl-app" data-view={user ? route.name : 'login'}>
             {!user && <Login onDone={loggedIn} />}
             {user && route.name === 'library' && (
-                <Library user={user} notify={notify} withBridge={withBridge} onOpenGroup={openGroup} onEditCharacter={editCharacter} />
+                <Library user={user} notify={notify} withBridge={withBridge} onOpenGroup={openGroup} onEditCharacter={editCharacter} onThemes={() => setSheet('themes')} />
             )}
             {user && route.name === 'work' && (
                 <WorkPage key={route.avatar} avatar={route.avatar} user={user} withBridge={withBridge} notify={notify}
@@ -306,6 +364,7 @@ function App() {
                 <Lazy key={route.book} page="world" book={route.book} entry={route.entry} eng={eng} notify={notify} onOpenNative={openWorldNative} />
             )}
             {user && route.name === 'preset' && <Lazy page="preset" eng={eng} notify={notify} onOpenPanel={openPanel} />}
+            {user && route.name === 'regex' && <Lazy page="regex" group={route.group} id={route.id} eng={eng} notify={notify} onOpenNative={openRegexNative} />}
             {user && route.name === 'me' && (
                 <MePage user={user} eng={eng} notify={notify} onOpenPanel={openPanel} onOpenModel={() => setSheet('model')} onOpenPersonal={() => setSheet('personal')}
                     onOpenReading={() => setSheet('reading')} onOpenCss={() => setSheet('css')} onOpenTools={openTools} />
@@ -327,8 +386,13 @@ function App() {
                     onOpenNative={() => { setSheet(null); showNative(true); }} onClose={() => setSheet(null)} />
             )}
             {sheet === 'model' && <ModelSheet notify={notify} onOpenPanel={openPanel} onClose={() => setSheet(null)} />}
-            {sheet === 'reading' && <ReadingSheet onClose={() => setSheet(null)} onEditTheme={editTheme} />}
+            {sheet === 'reading' && <ReadingSheet onClose={() => setSheet(null)} onEditTheme={editTheme} onPreviewThemes={() => setSheet('themes')} />}
+            {sheet === 'themes' && <ThemePickerSheet onClose={() => setSheet(null)} />}
             {sheet === 'css' && <CustomCssSheet onClose={() => setSheet(null)} />}
+            {nativeAsk && !nativeVisible && (
+                <NativePopupSheet key={nativeAsk.id} popup={nativeAsk} onAnswer={answerNativeAsk} onClose={leaveNativeAsk}
+                    onNative={() => { setNativeAsk(null); autoShown.current = true; showNative(true); }} />
+            )}
             {popupWaiting && !nativeVisible && (
                 <div class="tl-popup-bar" role="status">
                     <span>{typeof popupWaiting === 'string' ? popupWaiting : '原版界面里有一项要你确认'}</span>
@@ -363,4 +427,7 @@ function App() {
 installAttention();
 fitIphoneHomeScreen();
 engine.routeChatRequests({ save: saveThroughSync, get: getThroughSync });
+// iOS Safari only shows the pressed look (:active) on a page that listens for touches.
+document.addEventListener('touchstart', () => {}, { passive: true });
+refreshBootLook();
 render(<App />, document.getElementById('root'));
