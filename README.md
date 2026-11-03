@@ -1,5 +1,7 @@
 # 轻酒馆 Tavern Lite
 
+> 作者 icetea。仅供交流学习，非授权不可二转，禁止用于商业相关场景。
+
 SillyTavern 的轻量前端，以酒馆扩展的形式安装。界面可以用 CSS 自由美化，聊天请求仍由原版引擎处理。
 
 ## 为什么快
@@ -151,6 +153,8 @@ npm run build
 
 ## 许可证
 
-AGPL-3.0-or-later，见 [LICENSE](LICENSE)。
+作者 icetea。仅供交流学习，非授权不可二转，禁止用于商业相关场景。详细条款见 [LICENSE](LICENSE)。0.16.1 及之前的版本按当时附带的 AGPL-3.0-or-later 发布。
+
+`app/` 里打包的第三方开源组件按各自的许可证使用，见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 `skins/` 里的主题插图不在上面的许可范围内：版权归原作者，仅限非商业使用。

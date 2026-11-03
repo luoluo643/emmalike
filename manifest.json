@@ -6,8 +6,8 @@
     "js": "index.js",
     "css": "style.css",
     "generate_interceptor": "tavernLiteLineContext",
-    "author": "luoluo643",
-    "version": "0.16.1",
+    "author": "icetea",
+    "version": "0.16.2",
     "homePage": "https://github.com/luoluo643/emmalike",
     "auto_update": true
 }
