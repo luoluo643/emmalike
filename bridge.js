@@ -818,7 +818,8 @@ function extensionPanels(index) {
 // Horae storylines: a story's main text and its 番外 each keep their own memory; the line in use decides what is sent.
 // Read through Horae's public API; changes go through Horae's own storyline buttons (it listens for their clicks on
 // the page), so its rules for switching stay in one place. Without Horae (or with its storylines off) the shell keeps
-// its own record of the lines in the same shape (src/own-lines.js): shown the same way, nothing filtered when sending.
+// its own record of the lines in the same shape (src/own-lines.js): shown the same way; what each line sends is its
+// author's choice, held back by bridge-line-context.js.
 const STORYLINE_MAIN = 'main';
 
 function horaeStorylines() {
@@ -864,7 +865,7 @@ function writeLinePlan({ marks, registry }) {
     st.updateChatMetadata({ [LINES_KEY]: registry }, false);
 }
 
-const OWN_LINE_ACTIONS = ['to-main', 'to-line', 'clear-pending', 'new-next', 'mark', 'unmark', 'set-kind', 'rename', 'apply-suggestions'];
+const OWN_LINE_ACTIONS = ['to-main', 'to-line', 'clear-pending', 'new-next', 'mark', 'unmark', 'set-kind', 'rename', 'set-context', 'apply-suggestions'];
 
 /**
  * The shell's own line record changed and saved by the app's own save (never by writing the file). `scope` is the

@@ -212,7 +212,7 @@ export function Choices({ label, options, value, onChange }) {
     return (
         <div class="tl-choices" role="radiogroup" aria-label={label}>
             {Object.entries(options).map(([key, option]) => (
-                <button class="tl-choice" role="radio" aria-checked={value === key ? 'true' : 'false'} onClick={() => onChange(key)}>
+                <button type="button" class="tl-choice" role="radio" aria-checked={value === key ? 'true' : 'false'} onClick={() => onChange(key)}>
                     {option.swatch && <span class="tl-swatch" style={{ background: option.swatch }} aria-hidden="true" />}
                     <span>{option.label}</span>
                 </button>

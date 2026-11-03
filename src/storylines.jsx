@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import * as engine from './engine.js';
 import { EPISODE_KINDS } from './episode-intent.js';
 import { aiLinePrompt, parseAiLines, requestHeads, suggestLineMarks } from './inline-episodes.js';
-import { Sheet, SheetItem, Spinner } from './ui.jsx';
+import { Choices, Sheet, SheetItem, Spinner } from './ui.jsx';
 import './episodes.css';
 
 /**
  * The lines written inside this one story, read as sub-stories (line-view.js): one tap here opens a line, and what is
  * written there goes on it. Kept by Horae's storylines when they are on (each line then sends only its own memory),
- * else by the shell's own record (own-lines.js: shown apart, but the model still reads the whole story). The full app
- * shows the whole story in one. Not the 番外 sheet, whose lines are stories of their own.
+ * else by the shell's own record (own-lines.js), where each line sends what its author chose. The full app shows the
+ * whole story in one. Not the 番外 sheet, whose lines are stories of their own.
  */
 function StorylineSection({ initial, lines, view, onOpen, onEdit, disabled, notify, scope }) {
     const [state, setState] = useState(initial);
@@ -32,14 +32,14 @@ function StorylineSection({ initial, lines, view, onOpen, onEdit, disabled, noti
         <p class="tl-muted">{horae
             ? 'Horae 扩展的功能：一个故事分成几条线，每条线只把自己的内容发给模型。轻酒馆里每条线单独显示，在哪条线里写就接在哪条线后面；原版界面里还是一整个故事。'
             : '在故事里写「来个小剧场」「生成番外」，轻酒馆就从那句起记成一条线，写「回到正文」再回来；长按消息也能自己划。每条线单独显示，在哪条线里写就接在哪条线后面。'}</p>
-        {!horae && <p class="tl-muted">没装 Horae 时只是分开显示：模型写的时候还是会看到整个故事。想让记忆真的分开，到「番外与平行线」里拆成独立故事。</p>}
+        {!horae && <p class="tl-muted">每条线回复时发给模型什么，点「改」选：整个故事、分出来之前的正文加这条线，或只有这条线自己。原版自带的总结这类扩展仍读整个故事；要完全分开，到「番外与平行线」里拆成独立故事。</p>}
         {lines?.enabled && <div class="tl-storyline-tree" role="list" aria-label="这个故事里的线">
             {lines.lines.map(line => <div class="tl-storyline-row" role="listitem" key={line.id} data-depth={line.depth} style={{ '--tl-line-depth': Math.min(line.depth, 4) }}>
                 <SheetItem label={line.label} current={line.id === view} disabled={disabled || line.id === view}
-                    hint={[line.count ? `${line.count} 条` : '还没有内容', line.id === lines.writing ? '最新写到这里' : '', line.id === view ? '正在读' : '']
-                        .filter(Boolean).join(' · ')}
+                    hint={[line.count ? `${line.count} 条` : '还没有内容', line.id === lines.writing ? '最新写到这里' : '', line.id === view ? '正在读' : '',
+                        !horae && line.id !== 'main' ? LINE_CONTEXT_OPTIONS[line.context ?? 'all'].short : ''].filter(Boolean).join(' · ')}
                     onClick={() => onOpen(line.id)} />
-                {line.id !== 'main' && <button class="tl-link tl-storyline-edit" disabled={disabled || !!busy} onClick={() => onEdit(line)}>改类型{horae ? '' : '或名字'}</button>}
+                {line.id !== 'main' && <button class="tl-link tl-storyline-edit" disabled={disabled || !!busy} onClick={() => onEdit(line)}>{horae ? '改类型' : '改'}</button>}
             </div>)}
         </div>}
         {state?.pending && <div class="tl-row">
@@ -144,15 +144,19 @@ export function StorylineSheet({ initial, lines, view, onOpen, onEdit, notify, s
     </Sheet>;
 }
 
-/** A line's kind (any line) and name (the shell's own lines; Horae's are renamed in Horae). */
-export function LineFormSheet({ title, line = null, named = true, confirmLabel, onSave, onClose }) {
+/**
+ * A line's kind (any line), name and what it sends to the model (the shell's own lines; Horae's are kept by Horae).
+ * `sends`: the context to start from, or null when the line's sending is not the shell's to choose.
+ */
+export function LineFormSheet({ title, line = null, named = true, sends = null, confirmLabel, onSave, onClose }) {
     const [kind, setKind] = useState(line?.kind || 'side'), [name, setName] = useState(line?.title ?? '');
+    const [context, setContext] = useState(sends);
     const [busy, setBusy] = useState(false), [error, setError] = useState('');
     const save = event => {
         event.preventDefault();
         if (busy || named && !name.trim()) return;
         setBusy(true); setError('');
-        Promise.resolve(onSave({ kind, title: name.trim() })).then(onClose, e => { setError(e?.message || '没改成，再试一次'); setBusy(false); });
+        Promise.resolve(onSave({ kind, title: name.trim(), context })).then(onClose, e => { setError(e?.message || '没改成，再试一次'); setBusy(false); });
     };
     return <Sheet title={title} busy={busy} onClose={() => { if (!busy) onClose(); }}>
         <form class="tl-episode-form" onSubmit={save}>
@@ -160,6 +164,7 @@ export function LineFormSheet({ title, line = null, named = true, confirmLabel, 
                 {Object.entries(EPISODE_KINDS).map(([value, label]) => <option value={value}>{label}</option>)}</select></label>
             {named && <label>名字<input class="tl-input" maxLength={24} disabled={busy} value={name} placeholder="比如：丧尸男友"
                 onInput={e => setName(e.currentTarget.value)} /></label>}
+            {sends && <LineContextPicker value={context} onChange={setContext} disabled={busy} />}
             {error && <p class="tl-error">{error}</p>}
             <div class="tl-row">
                 <button class="tl-button tl-primary" disabled={busy || named && !name.trim()} aria-busy={busy ? 'true' : undefined}>{busy && <Spinner />}{confirmLabel}</button>
@@ -169,28 +174,46 @@ export function LineFormSheet({ title, line = null, named = true, confirmLabel, 
     </Sheet>;
 }
 
+/** What a reply on one of the shell's own lines is written from (own-lines.js LINE_CONTEXTS). */
+export const LINE_CONTEXT_OPTIONS = {
+    fork: { label: '前文 + 这条线', hint: '发分出来之前的正文和这条线。模型知道从哪里接着写，看不到之后的正文和别的线', short: '发前文和自己' },
+    own: { label: '只有这条线', hint: '只发这条线自己写的。像另开一个故事，适合和正文无关的小剧场', short: '只发自己' },
+    all: { label: '整个故事', hint: '正文和所有的线都发，和以前一样', short: '发整个故事' },
+};
+
+function LineContextPicker({ value, onChange, disabled }) {
+    return <div class="tl-line-context">
+        <p>回复时发给模型</p>
+        <Choices label="回复时发给模型" options={LINE_CONTEXT_OPTIONS} value={value} onChange={key => { if (!disabled) onChange(key); }} />
+        <p class="tl-muted">{LINE_CONTEXT_OPTIONS[value]?.hint}</p>
+    </div>;
+}
+
 /**
- * Before a message goes on a line kept only by the shell: the model will read the whole story, the 正文 and the other
- * lines too. Splitting it into a story of its own keeps the memory apart; or it is written here as it is.
+ * Before the first message goes on a line kept by the shell: what a reply on it is written from (and, once chosen for
+ * the lines to come, not asked again in this story). Or the line becomes a story of its own, apart in every way.
  */
 export function LineMemorySheet({ label, isNew, canSplit, onSplit, onHere, onClose }) {
     const [busy, setBusy] = useState(false), [error, setError] = useState('');
-    const split = () => {
+    const [context, setContext] = useState('fork'), [remember, setRemember] = useState(true);
+    const run = action => {
         if (busy) return;
         setBusy(true); setError('');
-        Promise.resolve(onSplit()).catch(e => setError(e?.message || '没拆成，再试一次')).finally(() => setBusy(false));
+        Promise.resolve(action()).catch(e => { setError(e?.message || '没成功，再试一次'); }).finally(() => setBusy(false));
     };
-    return <Sheet title="写在这条线里？" busy={busy} onClose={() => { if (!busy) onClose(); }}>
+    return <Sheet title="这条线发给模型什么？" busy={busy} onClose={() => { if (!busy) onClose(); }}>
         <div class="tl-settings-group">
-            <p>「{label}」{isNew ? '会' : ''}和正文在同一个故事里。没装 Horae 时轻酒馆只能分开显示，模型写的时候还是会看到整个故事，包括正文和其他线。</p>
-            <p class="tl-muted">想让它的记忆真的和正文分开，就{isNew ? '分开写' : '把这条线拆成独立故事，在那边接着写'}。</p>
+            <p>「{label}」{isNew ? '会' : ''}写在这个故事里。</p>
+            <LineContextPicker value={context} onChange={setContext} disabled={busy} />
+            <label class="tl-episode-switch"><input type="checkbox" checked={remember} disabled={busy} onChange={e => setRemember(e.currentTarget.checked)} />
+                以后新开的线也这样，不再问</label>
             {error && <p class="tl-error">{error}</p>}
             <div class="tl-row">
-                {canSplit && <button class="tl-button tl-primary" disabled={busy} aria-busy={busy ? 'true' : undefined} onClick={split}>
-                    {busy && <Spinner />}{isNew ? '分开写' : '拆成独立故事接着写'}</button>}
-                <button class="tl-button" disabled={busy} onClick={onHere}>还是写在这里</button>
+                <button class="tl-button tl-primary" disabled={busy} aria-busy={busy ? 'true' : undefined} onClick={() => run(() => onHere({ context, remember }))}>
+                    {busy && <Spinner />}写在这里</button>
+                {canSplit && <button class="tl-button" disabled={busy} onClick={() => run(onSplit)}>{isNew ? '分开写' : '拆成独立故事接着写'}</button>}
             </div>
-            <p class="tl-muted">选「还是写在这里」后，这个故事不再问</p>
+            <p class="tl-muted">之后可以在「故事里的线」里改。{canSplit ? `${isNew ? '分开写' : '拆成独立故事'}是另存成一个新故事，和这个故事完全分开。` : ''}</p>
         </div>
     </Sheet>;
 }

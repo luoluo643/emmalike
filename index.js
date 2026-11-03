@@ -2,6 +2,7 @@ import * as st from '/script.js';
 import * as openai from '/scripts/openai.js';
 import * as groups from '/scripts/group-chats.js';
 import { installNativeSettleBootstrap } from './bridge-native-bootstrap.js';
+import { installLineContext } from './bridge-line-context.js';
 
 const appUrl = new URL('./app/', import.meta.url).href;
 
@@ -24,6 +25,9 @@ function addMenuEntry() {
     item.addEventListener('click', () => { location.href = appUrl; });
     menu.append(item);
 }
+
+// What each of a story's lines sends to the model, in the engine and in the full app alike (manifest generate_interceptor).
+installLineContext(window);
 
 // Inside the lite shell's hidden engine page, leaving the full app would detach the shell from it.
 if (runningAsEngine()) {

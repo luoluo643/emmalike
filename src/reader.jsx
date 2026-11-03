@@ -596,7 +596,8 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     const layoutOf = from => {
         if (bridgeNow) return lineView({ storyline: storylineNow, total: storyTotal, from, kindOf, nameOf });
         if (!preview) return { enabled: false };
-        const registry = previewOwn?.lines ?? preview.metadata?.horae_storylines?.lines ?? null;
+        const registry = previewOwn ? Object.fromEntries(Object.entries(previewOwn.lines).map(([id, line]) => [id, { ...line, context: previewOwn.contexts[id] ?? null }]))
+            : preview.metadata?.horae_storylines?.lines ?? null;
         const ids = previewOwn ? ownIds(preview, previewOwn) : idsFromMarks(preview, registry);
         return lineView({ ids, registry, total: preview.length, from, kindOf, nameOf });
     };
@@ -757,9 +758,9 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
         if (!event.target.closest('button, a, input, textarea, .tl-swipe')) setHeaderHidden(h => !h);
     };
 
-    const lineHereKey = scopedKey('line-here', chatFile);
-    // `confirmed`: the author chose to write on a line the shell keeps, knowing the model reads the whole story.
-    const send = ({ here = false, text: chosen, confirmed = false } = {}) => {
+    // `confirmed`: the author chose what the line the shell keeps sends to the model; `sends` ({ context, remember }):
+    // that choice, for a new line the message starts.
+    const send = ({ here = false, text: chosen, confirmed = false, sends = null } = {}) => {
         const text = (chosen ?? draft).trim();
         if (!text || pendingRef.current || episodeBusy) return;
         const bridge = engine.getBridge();
@@ -773,10 +774,12 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
         const directive = state?.source === 'lite' ? lineDirective(text)
             ?? (asked?.action === 'create' ? { action: 'start', kind: asked.kind, title: asked.title } : null) : null;
         const from = view ?? state?.active ?? MAIN_LINE;
-        const step = directive?.action === 'start' ? { action: 'new-next', title: directive.title, kind: directive.kind, parent: from, auto: !!directive.weak }
+        const step = directive?.action === 'start' ? { action: 'new-next', title: directive.title, kind: directive.kind, parent: from, auto: !!directive.weak, ...sends }
             : directive?.action === 'back' && from !== MAIN_LINE ? { action: 'to-main' } : null;
         const target = step?.action === 'new-next' ? 'new' : step ? MAIN_LINE : from;
-        if (state?.source === 'lite' && target !== MAIN_LINE && !confirmed && !readStory(lineHereKey)) {
+        // Asked once a line: a new one takes what was chosen for the lines to come, if anything was.
+        const chosenSends = target === 'new' ? !!state?.defaultContext : !!state?.registry?.[target]?.context;
+        if (state?.source === 'lite' && target !== MAIN_LINE && !confirmed && !chosenSends) {
             setSheet({ type: 'line-memory', text, step, target,
                 label: target === 'new' ? `${EPISODE_KINDS[step.kind] || '番外'} · ${step.title}` : lines.enabled ? lines.label(target) : '这条线' });
             return;
@@ -1244,11 +1247,14 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
             {sheet?.type === 'storylines' && <StorylineSheet initial={storyline} lines={lines} view={view} onOpen={openLine}
                 onEdit={line => setSheet({ type: 'line-edit', line })} notify={notify} scope={storyScope} onClose={() => setSheet(null)} />}
             {sheet?.type === 'line-edit' && <LineFormSheet title={`改「${sheet.line.label}」`} line={sheet.line} named={storyline?.source !== 'horae'}
-                confirmLabel="保存" onClose={() => setSheet({ type: 'storylines' })} onSave={async ({ kind, title }) => {
+                sends={storyline?.source === 'horae' ? null : sheet.line.context ?? 'all'}
+                confirmLabel="保存" onClose={() => setSheet({ type: 'storylines' })} onSave={async ({ kind, title, context }) => {
                     const b = engine.getBridge();
                     if (!b) throw new Error('原版界面还在准备，好了再改');
                     if (kind !== sheet.line.kind) await b.storylineAction('set-kind', { line: sheet.line.id, kind, scope: storyScope });
                     if (storyline?.source !== 'horae' && title !== sheet.line.title) await b.storylineAction('rename', { line: sheet.line.id, title, scope: storyScope });
+                    if (storyline?.source !== 'horae' && context !== (sheet.line.context ?? 'all'))
+                        await b.storylineAction('set-context', { line: sheet.line.id, context, scope: storyScope });
                     notify('已改好', 'info');
                 }} />}
             {sheet?.type === 'message-line' && <MessageLineSheet index={sheet.message.index} lines={lines} busy={sheetBusy} waiting={sheetWaiting}
@@ -1265,14 +1271,23 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                 </Sheet>
             )}
             {sheet?.type === 'line-new' && <LineFormSheet title="从这里开一条番外" confirmLabel="开始" onClose={() => setSheet(null)}
-                onSave={({ kind, title }) => engine.whenBridge().then(b => b.storylineAction('mark', { index: sheet.message.index, title, kind, scope: storyScope }))
+                sends={storyline?.source === 'lite' ? storyline.defaultContext ?? 'fork' : null}
+                onSave={({ kind, title, context }) => engine.whenBridge().then(b => b.storylineAction('mark', { index: sheet.message.index, title, kind, context, scope: storyScope }))
                     .then(() => notify(`从这条起是${EPISODE_KINDS[kind]}「${title}」`, 'info'))} />}
             {sheet?.type === 'line-memory' && (() => {
                 const bridge = engine.getBridge(), status = bridge?.episodeStatus?.();
                 const isNew = sheet.target === 'new';
                 const canSplit = !!status?.enabled && (isNew ? !!status.verified : !!(status.extractable ?? status.verified) && !!bridge?.extractEpisode);
                 return <LineMemorySheet label={sheet.label} isNew={isNew} canSplit={canSplit} onClose={() => setSheet(null)}
-                    onHere={() => { writeStory(lineHereKey, true); setSheet(null); send({ here: true, text: sheet.text, confirmed: true }); }}
+                    onHere={async sends => {
+                        if (!isNew) {
+                            const b = engine.getBridge();
+                            if (!b) throw new Error('原版界面还在准备，好了再发');
+                            await b.storylineAction('set-context', { line: sheet.target, ...sends, scope: storyScope });
+                        }
+                        setSheet(null);
+                        send({ here: true, text: sheet.text, confirmed: true, sends: isNew ? sends : null });
+                    }}
                     onSplit={() => isNew
                         ? setSheet({ type: 'episodes', intent: { action: 'create', kind: sheet.step.kind, title: sheet.step.title, text: sheet.text, contextMode: 'continued', historical: false } })
                         : splitLine(sheet.target, sheet.text)} />;

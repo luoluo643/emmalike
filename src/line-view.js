@@ -59,7 +59,8 @@ export function lineView({ storyline = null, ids: given = null, registry = null,
     const label = id => id === MAIN_LINE ? '正文' : `${KIND_NAMES[kind(id)] ?? '番外'} · ${title(id)}`;
     const list = [...new Set([MAIN_LINE, ...counts.keys(), ...(pending ? [pending] : [])])]
         .filter(id => counts.has(id) || id === writing)
-        .map(id => ({ id, label: label(id), title: title(id), kind: kind(id), parent: parentOf(id), count: counts.get(id) ?? 0 }));
+        .map(id => ({ id, label: label(id), title: title(id), kind: kind(id), parent: parentOf(id), count: counts.get(id) ?? 0,
+            context: id === MAIN_LINE ? null : lines[id]?.context ?? null }));
     // Nothing to split when every message here is on one line.
     if (list.length < 2) return { enabled: false };
     const has = id => list.some(line => line.id === id);

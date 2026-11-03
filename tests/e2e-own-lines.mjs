@@ -84,13 +84,16 @@ const sendText = async text => {
 };
 check('a story without lines is an ordinary story', (await chapter()).startsWith(file), await chapter());
 
-// A request for a 小剧场: first a word that the model still reads the whole story, then it goes on its own line.
+// A request for a 小剧场: first asked what the line sends to the model (here the whole story, for the lines to come
+// too: e2e-line-context checks the others), then it goes on its own line.
 await sendText('写个小剧场：丧尸男友');
-const memory = sheet('写在这条线里？');
+const memory = sheet('这条线发给模型什么？');
 await memory.waitFor({ timeout: 20000 });
-check('asked first: the model reads the whole story', (await memory.textContent()).includes('还是会看到整个故事'), await memory.textContent());
+check('asked first what the line sends', (await memory.getByRole('radio').allInnerTexts()).join('|') === '前文 + 这条线|只有这条线|整个故事',
+    JSON.stringify(await memory.getByRole('radio').allInnerTexts()));
 check('offers to write it apart', await memory.getByRole('button', { name: '分开写' }).count() === 1);
-await memory.getByRole('button', { name: '还是写在这里' }).click();
+await memory.getByRole('radio', { name: '整个故事' }).click();
+await memory.getByRole('button', { name: '写在这里' }).click();
 await page.waitForFunction(() => document.querySelectorAll('.tl-messages .tl-message[data-index]').length >= 2, null, { timeout: 120000 });
 await idle();
 await showing([3, 4]);
@@ -108,7 +111,7 @@ check('saved: the mark on the request', saved[4]?.tavern_lite_line === zombie &&
 // Inside it, no second question; "回到正文" goes back to the 正文.
 await sendText('接着写丧尸');
 await idle();
-check('asked once per story', await sheet('写在这条线里？').count() === 0);
+check('asked once per story', await sheet('这条线发给模型什么？').count() === 0);
 await showing([3, 4, 5, 6]);
 check('written on the line being read', JSON.stringify(await shown()) === '[3,4,5,6]', JSON.stringify(await shown()));
 await sendText('回到正文');
@@ -146,8 +149,10 @@ const linesSheet = sheet('故事里的线');
 await linesSheet.waitFor();
 const rows = await linesSheet.locator('.tl-storyline-row').allInnerTexts();
 check('the sheet lists the lines by kind', rows.some(r => r.includes('小剧场 · 丧尸男友')) && rows.some(r => r.includes('平行线 · 古风')), JSON.stringify(rows));
-check('no Horae wording, and says the model reads it all', !(await linesSheet.textContent()).includes('Horae 扩展的功能') && (await linesSheet.textContent()).includes('还是会看到整个故事'));
-await linesSheet.locator('.tl-storyline-row', { hasText: '丧尸男友' }).getByRole('button', { name: /^改类型/ }).click();
+check('no Horae wording, and says each line chooses what it sends', !(await linesSheet.textContent()).includes('Horae 扩展的功能')
+    && (await linesSheet.textContent()).includes('每条线回复时发给模型什么'));
+check('each line says what it sends', rows.some(r => r.includes('丧尸男友') && r.includes('发整个故事')), JSON.stringify(rows));
+await linesSheet.locator('.tl-storyline-row', { hasText: '丧尸男友' }).getByRole('button', { name: '改', exact: true }).click();
 const edit = page.getByRole('dialog', { name: /^改「/ });
 await edit.getByLabel('类型').selectOption('side');
 await edit.getByRole('button', { name: '保存' }).click();

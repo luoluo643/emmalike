@@ -1,16 +1,23 @@
 // The lines written inside one story, recorded by the shell itself when Horae's storylines are not on. Kept the way
 // Horae keeps them, so the same reading (line-view.js) serves both: a mark on the message a line starts at (the
 // messages after it follow it until the next mark) and a registry in the story's metadata. Own names, so a Horae of
-// any version never reads them as its own. Nothing is filtered before generation: the model still sees the story.
+// any version never reads them as its own. Each line chooses what a reply on it is written from (LINE_CONTEXTS): the
+// whole story, as before; the 正文 up to where it left plus itself; or itself alone. bridge-line-context.js holds the
+// rest back before generation.
 export const LINE_FIELD = 'tavern_lite_line';
 export const LINES_KEY = 'tavern_lite_lines';
 export const MAIN = 'main';
 export const LINE_KINDS = ['side', 'parallel', 'skit'];
+/** all: the whole story (the other lines too); fork: what came before it left, then itself; own: itself alone. */
+export const LINE_CONTEXTS = ['all', 'fork', 'own'];
 
 const object = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const cleanTitle = title => String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, 36);
 
-/** The registry as stored, every part checked: { lines: {id: {title, kind, parent, deleted}}, pending, kinds }. */
+/**
+ * The registry as stored, every part checked: { lines: {id: {title, kind, parent, deleted}}, pending, kinds, contexts,
+ * defaultContext } (defaultContext: what a new line sends, once the author chose it for the lines to come).
+ */
 export function readRegistry(metadata) {
     const stored = object(metadata?.[LINES_KEY]) ? metadata[LINES_KEY] : {};
     const lines = {};
@@ -24,7 +31,10 @@ export function readRegistry(metadata) {
     const kinds = {};
     for (const [id, kind] of Object.entries(object(stored.kinds) ? stored.kinds : {})) if (LINE_KINDS.includes(kind)) kinds[id] = kind;
     const pending = typeof stored.pending === 'string' && (stored.pending === MAIN || lines[stored.pending] && !lines[stored.pending].deleted) ? stored.pending : null;
-    return { lines, pending, kinds };
+    const contexts = {};
+    for (const [id, context] of Object.entries(object(stored.contexts) ? stored.contexts : {})) if (id !== MAIN && LINE_CONTEXTS.includes(context)) contexts[id] = context;
+    const defaultContext = LINE_CONTEXTS.includes(stored.defaultContext) ? stored.defaultContext : null;
+    return { lines, pending, kinds, contexts, defaultContext };
 }
 
 const known = (registry, id) => id === MAIN || !!(registry.lines[id] && !registry.lines[id].deleted);
@@ -52,9 +62,59 @@ export function ownState(messages, metadata) {
     const used = segments.some(s => s.id !== MAIN);
     return {
         source: 'lite', multi: used || !!pending, active: here, pending, segments,
-        registry: Object.fromEntries(Object.entries(registry.lines).map(([id, line]) => [id, { ...line, kind: registry.kinds[id] ?? line.kind }])),
-        kinds: registry.kinds,
+        registry: Object.fromEntries(Object.entries(registry.lines).map(([id, line]) => [id,
+            { ...line, kind: registry.kinds[id] ?? line.kind, context: registry.contexts[id] ?? null }])),
+        kinds: registry.kinds, defaultContext: registry.defaultContext,
     };
+}
+
+/** The line a reply goes on: the one asked for; but a reply that replaces or goes on with the last one stays on its line. */
+export function replyLine(messages, metadata, { afterLast = false } = {}) {
+    const registry = readRegistry(metadata);
+    const here = ownSegments(messages, registry).at(-1)?.id ?? MAIN;
+    return !afterLast && registry.pending ? registry.pending : here;
+}
+
+/**
+ * The messages a reply on `line` is written from, by what each line chose to send (LINE_CONTEXTS): a Set of indices,
+ * or null when nothing is held back (no line keeps apart; the story as before). A line kept apart is left out of every
+ * other line, except the lines that left it: as the part before they left (fork), or all of it (all). The 正文 sends
+ * like 'all'.
+ */
+export function sentIndices(messages, metadata, line) {
+    const registry = readRegistry(metadata);
+    const ids = ownIds(messages, registry);
+    const contextOf = id => id === MAIN || !known(registry, id) ? 'all' : registry.contexts[id] ?? 'all';
+    const apart = id => contextOf(id) !== 'all';
+    if (!apart(line) && !ids.some(apart)) return null;
+    const parentOf = id => {
+        const parent = registry.lines[id]?.parent;
+        return parent && parent !== id && known(registry, parent) ? parent : MAIN;
+    };
+    // A line with nothing written yet starts after everything there is.
+    const firstOf = id => { const at = ids.indexOf(id); return at < 0 ? ids.length : at; };
+    // The lines it left from, up to the 正文: never apart from it.
+    const above = id => {
+        const lines = new Set();
+        let at = id;
+        while (at !== MAIN) {
+            at = parentOf(at);
+            if (at === id || lines.has(at)) break;
+            lines.add(at);
+        }
+        return lines;
+    };
+    const keep = (id, seen) => {
+        const mode = contextOf(id), kept = new Set(), from = mode === 'all' ? above(id) : null;
+        ids.forEach((on, i) => { if (on === id || mode === 'all' && (!apart(on) || from.has(on))) kept.add(i); });
+        if (mode === 'fork' && id !== MAIN && !seen.has(id)) {
+            seen.add(id);
+            const start = firstOf(id);
+            for (const i of keep(parentOf(id), seen)) if (i < start) kept.add(i);
+        }
+        return kept;
+    };
+    return keep(known(registry, line) ? line : MAIN, new Set());
 }
 
 /**
@@ -81,26 +141,32 @@ const error = message => Object.assign(new Error(message), { code: 'LINE_INVALID
 /**
  * What an action changes: { marks: [[index, line | null]], registry } (null removes a mark), for the bridge to write
  * into the open story. `makeId` names a new line.
- * - 'new-next' { title, kind, parent }: a new line, the next message starts it
+ * - 'new-next' { title, kind, parent, context, remember }: a new line, the next message starts it
  * - 'to-main' / 'to-line' { line } / 'clear-pending': the line the next message goes on
  * - 'apply-pending' { index }: the message just sent starts the line asked for
- * - 'mark' { index, line } or { index, title, kind }: from this message on, a line (an existing or a new one)
+ * - 'mark' { index, line } or { index, title, kind, context }: from this message on, a line (an existing or a new one)
  * - 'unmark' { index }: this message follows the one before again
  * - 'set-kind' { line, kind }, 'rename' { line, title }
+ * - 'set-context' { line, context, remember }: what a reply on the line is written from (remember: and new lines too)
  * - 'apply-suggestions' { items: [{ index, action: 'start' | 'back', title, kind }] }: marks for an older story
+ * A new line sends what the author chose for the lines to come, if they did.
  */
 export function planLineAction(messages, metadata, action, options = {}, makeId = () => `tl-line-${Math.random().toString(36).slice(2, 10)}`) {
     const registry = readRegistry(metadata);
     const stored = object(metadata?.[LINES_KEY]) ? metadata[LINES_KEY] : {};
-    const next = { version: 1, lines: object(stored.lines) ? { ...stored.lines } : {}, pending: registry.pending, kinds: { ...registry.kinds } };
+    const next = { version: 1, lines: object(stored.lines) ? { ...stored.lines } : {}, pending: registry.pending, kinds: { ...registry.kinds },
+        contexts: { ...registry.contexts }, ...(registry.defaultContext ? { defaultContext: registry.defaultContext } : {}) };
     const marks = [];
     const total = messages?.length ?? 0;
     const ids = ownIds(messages, registry);
     const here = ids.at(-1) ?? MAIN;
-    const newLine = ({ title, kind, parent, auto }) => {
+    const remember = context => { if (options.remember && LINE_CONTEXTS.includes(context)) next.defaultContext = context; };
+    const newLine = ({ title, kind, parent, auto, context }) => {
         const id = makeId();
         next.lines[id] = { title: cleanTitle(title) || '番外', kind: LINE_KINDS.includes(kind) ? kind : 'side',
             parent: typeof parent === 'string' && known(registry, parent) ? parent : here, createdAt: Date.now(), ...(auto ? { auto: true } : {}) };
+        const sends = LINE_CONTEXTS.includes(context) ? context : next.defaultContext;
+        if (sends) next.contexts[id] = sends;
         // Known from here on, for the marks that follow in the same action.
         registry.lines[id] = { ...next.lines[id], deleted: false };
         return id;
@@ -110,7 +176,7 @@ export function planLineAction(messages, metadata, action, options = {}, makeId 
         if (!Number.isSafeInteger(index) || index < 0 || index >= total) throw error('没有这条消息');
     };
     switch (action) {
-        case 'new-next': next.pending = newLine(options); break;
+        case 'new-next': next.pending = newLine(options); remember(options.context); break;
         case 'to-main': next.pending = here === MAIN ? null : MAIN; break;
         case 'to-line':
             if (!known(registry, options.line)) throw error('没有这条线');
@@ -148,6 +214,12 @@ export function planLineAction(messages, metadata, action, options = {}, makeId 
             if (!title) throw error('请输入名字');
             next.lines[options.line] = { ...next.lines[options.line], title, auto: false }; break;
         }
+        case 'set-context':
+            if (!options.line || options.line === MAIN || !known(registry, options.line)) throw error('没有这条线');
+            if (!LINE_CONTEXTS.includes(options.context)) throw error('请选择发给模型的内容');
+            next.contexts[options.line] = options.context;
+            remember(options.context);
+            break;
         case 'apply-suggestions': {
             // A message that already starts a line keeps it.
             const starts = new Set(ownSegments(messages, registry).map(s => s.start));
