@@ -57,7 +57,7 @@ function App(){const [open,setOpen]=useState(false),[rename,setRename]=useState(
  const change=next=>{revision.current++;value.current=next;setText(next)};
  window.harness={open:next=>{setIntent(next||null);setOpen(true)},rename:()=>{setOpen(false);setRename(true)},change,close:()=>setOpen(false)};
  return h('div',{class:'tl-app'},h('button',{onClick:()=>setOpen(true)},'番外入口'),h('textarea',{id:'draft',value:text,readOnly:true}),
-  open&&h(EpisodesSheet,{account,scope:window.fixtureScope||root,characterName:'合成角色',currentTitle:'普通故事 · source',draft:text,draftRevision:revision.current,
+  open&&h(EpisodesSheet,{account,scope:window.fixtureScope||root,characterName:'合成角色',currentTitle:'source',draft:text,draftRevision:revision.current,
    initialIntent:intent,onClose:()=>setOpen(false),
    onCopied:(_,next)=>change(next),onSent:capture=>{if(capture.revision===revision.current&&capture.text===value.current)change('')},notify:()=>{}}),
   rename&&h(EpisodeRenameSheet,{account,avatar,file:'child-a',episode:meta(2,'旧标题'),withBridge:(_,action)=>action(window.fixtureBridge),onClose:()=>setRename(false),onChanged:()=>calls.push(['renamed'])}));}
@@ -91,7 +91,7 @@ try {
     const count = type => page.evaluate(type => calls.filter(x => x[0] === type).length, type);
     await start();
     check('打开面板时先核对上次停在半路的发送', await page.waitForFunction(() => calls.some(x => x[0] === 'settle')).then(() => true));
-    check('面板顶上写明现在在哪', await page.getByText('你在：普通故事 · source').isVisible());
+    check('面板顶上写明现在在哪', await page.getByText('你在：source').isVisible());
     await page.evaluate(() => { fixture.setCurrent({account:'episode-ui-qa',avatar:'fixture.png',file:'child-a'}); harness.close(); });
     await page.evaluate(() => harness.open());
     await page.getByText('你在：番外 · 雨夜').waitFor();
@@ -214,12 +214,12 @@ try {
     check('关闭增强仍可恢复草稿且追加不覆盖', await page.locator('#draft').inputValue() === '原有草稿\n\n只复制作者请求' && await count('send') === 0);
     await button('把请求放进别的故事').click();
     await page.evaluate(() => localStorage.setItem(fixture.draftKey('other'),JSON.stringify('目标已有草稿')));
-    await button('普通故事 · other').click();
+    await button('other').click();
     await page.waitForFunction(() => JSON.parse(localStorage.getItem(fixture.draftKey('other'))) === '目标已有草稿\n\n只复制作者请求');
     check('纠正目的地只追加请求不复制结果不发送', await page.evaluate(() => JSON.parse(localStorage.getItem(fixture.draftKey('other')))) === '目标已有草稿\n\n只复制作者请求' && await count('send') === 0);
     await button('把请求放进别的故事').click();
     await page.evaluate(() => { window.savedSetItem=Storage.prototype.setItem; Storage.prototype.setItem=function(){throw Error('合成配额不足')}; });
-    await button('普通故事 · other').click();
+    await button('other').click();
     check('草稿写入失败可见且不假报复制', await page.getByRole('alert').textContent().then(x => x.includes('合成配额不足')) && await page.getByRole('heading', { name: '把请求放进别的故事' }).isVisible());
     await page.evaluate(() => { Storage.prototype.setItem=window.savedSetItem; });
     await page.setViewportSize({ width: 1440, height: 1000 }); await page.screenshot({ path: path.join(output, 'recovery-desktop.png') });

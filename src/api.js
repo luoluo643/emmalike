@@ -201,6 +201,12 @@ export async function getGroupChat(file) {
     return Array.isArray(data) ? data.filter(m => m && typeof m.mes === 'string') : [];
 }
 
+/** Just the file names of a character's chapters: the server lists the folder without opening the files. */
+export async function getChapterNames(avatar) {
+    const list = await request('/api/characters/chats', { body: { avatar_url: avatar, simple: true } });
+    return Array.isArray(list) ? list.map(x => x?.file_name).filter(Boolean) : [];
+}
+
 /** Chapters (chat files) of a character, most recent first. */
 export async function getChapters(avatar) {
     const list = await request('/api/characters/chats', { body: { avatar_url: avatar, metadata: true } });
@@ -236,6 +242,22 @@ export async function uploadBackground(file) {
     if (!response.ok) throw new Error('图片上传失败');
     const saved = (await response.text()).trim() || name;
     return `/backgrounds/${encodeURIComponent(saved)}`;
+}
+
+/** Uploads a font into the account's files (fonts are not pictures: the background library would refuse them) and returns its address. */
+export async function uploadFontFile(file, name) {
+    const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = () => reject(new Error('读不了这个文件'));
+        reader.readAsDataURL(file);
+    });
+    const { path } = await request('/api/files/upload', { body: { name, data } });
+    return `/${path.replace(/^\/+/, '')}`;
+}
+
+export async function deleteFontFile(url) {
+    await send('/api/files/delete', { body: { path: url.replace(/^\/+/, '') } });
 }
 
 // Character fields the shell edits. V1 fields also live at the card's top level (older readers use them), so they

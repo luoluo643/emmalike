@@ -1,11 +1,13 @@
 // Appearance has three parts, all stored per browser and account, and synced to the account:
 //   reading settings (which theme, font size, spacing…) chosen in the "Aa" sheet
 //   custom themes the user made: colours, background picture, font and the theme's own CSS
+//   fonts the user added (fonts.js), declared in style#tl-font-css; only the one in use, so the others are not downloaded
 //   custom CSS written by hand for the whole app.
 // The theme and reading settings become style#tl-reading-css; the custom CSS is style#tl-user-css, placed after it
 // so hand-written rules always win. index.html injects both cached stylesheets before the app loads (no flash).
 // Another account signing in on this browser starts from its own copy (or the defaults), never from the last one's.
 import { UI_FONT_SIZE, cleanDisplay, fontSize, reconcileDisplay } from './display-model.js';
+import { MAX_FONTS, cleanFont, fontFaceCss, fontKey, fontValue, sameFont } from './fonts.js';
 export { UI_FONT_SIZE } from './display-model.js';
 const CSS_KEY = 'tavern-lite:custom-css';
 const DISPLAY_OWNER_KEY = 'tavern-lite:display-owner';
@@ -566,7 +568,8 @@ export function cleanTheme(theme) {
         blur: clamp(theme.blur, 0, 20, 0),
         glass: clamp(theme.glass, 0, 24, 0),
         radius: clamp(theme.radius, 0, 28, 16),
-        font: FONTS[theme.font] ? theme.font : 'default',
+        // An added font may arrive after the theme or never (a shared theme); until it is there the theme has no font of its own.
+        font: FONTS[theme.font] || /^custom:[a-z0-9]+$/.test(theme.font ?? '') ? theme.font : 'default',
         css: typeof theme.css === 'string' ? theme.css.slice(0, 20000) : '',
     };
 }
@@ -590,10 +593,24 @@ export function themeLabel(key, themes) {
     return findTheme(key, themes)?.name ?? PRESETS.system.name;
 }
 
-function clean(reading, themes) {
+export function cachedFonts() {
+    try {
+        const list = JSON.parse(stored('fonts') ?? '[]');
+        return Array.isArray(list) ? list.map(cleanFont).filter(Boolean) : [];
+    } catch {
+        return [];
+    }
+}
+
+/** The fixed fonts and the added ones, as the font choices show them. */
+export function fontOptions(fonts = cachedFonts()) {
+    return { ...FONTS, ...Object.fromEntries(fonts.map(font => [fontKey(font), { label: font.name, value: fontValue(font) }])) };
+}
+
+function clean(reading, themes, fonts = cachedFonts()) {
     const r = { ...DEFAULT_READING, ...(reading ?? {}) };
     if (!findTheme(r.theme, themes)) r.theme = DEFAULT_READING.theme;
-    for (const [key, options] of [['font', FONTS], ['lineHeight', LINE_HEIGHTS], ['width', WIDTHS], ['paragraph', PARAGRAPHS], ['margin', MARGINS]]) {
+    for (const [key, options] of [['font', fontOptions(fonts)], ['lineHeight', LINE_HEIGHTS], ['width', WIDTHS], ['paragraph', PARAGRAPHS], ['margin', MARGINS]]) {
         if (!options[r[key]]) r[key] = DEFAULT_READING[key];
     }
     r.indent = r.indent !== false;
@@ -603,11 +620,12 @@ function clean(reading, themes) {
     return r;
 }
 
-export function readingCss(reading, themes = cachedThemes()) {
-    const r = clean(reading, themes);
+export function readingCss(reading, themes = cachedThemes(), fonts = cachedFonts()) {
+    const r = clean(reading, themes, fonts);
     const theme = findTheme(r.theme, themes) ?? {};
     // The reading setting's font wins; a theme's own font applies while the reader keeps "default".
-    const font = FONTS[r.font].value ?? FONTS[theme.font]?.value;
+    const options = fontOptions(fonts);
+    const font = options[r.font].value ?? options[theme.font]?.value;
     const vars = {
         'font-size': `${r.fontSize}px`,
         'ui-font-size': `${cachedDisplay().fontSize}px`,
@@ -623,6 +641,14 @@ export function readingCss(reading, themes = cachedThemes()) {
     const body = Object.entries(vars).map(([k, v]) => `--tl-${k}: ${v};`).join(' ');
     const scheme = theme.bg ? ` color-scheme: ${isDark(theme) ? 'dark' : 'light'};` : '';
     return `:root { ${body}${scheme} }${theme.css ? `\n${theme.css}` : ''}`;
+}
+
+/** Declares the added font in use, if any: the reading setting's, or else the theme's. */
+export function fontCss(reading, themes = cachedThemes(), fonts = cachedFonts()) {
+    const r = clean(reading, themes, fonts);
+    const key = r.font === 'default' ? findTheme(r.theme, themes)?.font : r.font;
+    const font = fonts.find(f => fontKey(f) === key);
+    return font ? fontFaceCss(font) : '';
 }
 
 function styleElement(id, before) {
@@ -673,7 +699,10 @@ export function setAppearanceAccount(account) {
 /** What index.html applies before any code loads, compiled by this build so a changed theme reaches the loading screen. */
 function storeBootLook() {
     const account = appearanceAccount;
-    if (account) storage(s => s.setItem(appearanceKey(account, 'look-css'), readingCss(cachedReading())));
+    if (account) storage(s => {
+        s.setItem(appearanceKey(account, 'look-css'), readingCss(cachedReading()));
+        s.setItem(appearanceKey(account, 'font-css'), fontCss(cachedReading()));
+    });
 }
 
 /**
@@ -713,6 +742,12 @@ export function saveDisplay(value, bridge) {
 export function applyReading(reading, themes) {
     document.getElementById('tl-display-boot')?.remove();
     styleElement('tl-reading-css', 'tl-user-css').textContent = readingCss(reading, themes);
+    // Only rewritten when it changes: redeclaring a font makes the text flash on every setting.
+    const faces = fontCss(reading, themes);
+    if (faces || document.getElementById('tl-font-css')) {
+        const style = styleElement('tl-font-css', 'tl-reading-css');
+        if (style.textContent !== faces) style.textContent = faces;
+    }
     const theme = findTheme(clean(reading, themes).theme, themes);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme?.bg ?? '#1c1b1f');
 }
@@ -726,16 +761,18 @@ function localStamp() {
     return Number(stored('updated') ?? 0);
 }
 
-function cache({ reading, customCss, themes }, updated) {
+function cache({ reading, customCss, themes, fonts }, updated) {
     const account = appearanceAccount;
     if (!account) return;
     storage(s => {
         const put = (part, value) => s.setItem(appearanceKey(account, part), value);
         if (themes) put('themes', JSON.stringify(themes));
+        if (fonts) put('fonts', JSON.stringify(fonts));
         const list = themes ?? cachedThemes();
         const r = clean(reading ?? cachedReading(), list);
         put('reading', JSON.stringify(r));
         put('look-css', readingCss(r, list));
+        put('font-css', fontCss(r, list));
         if (typeof customCss === 'string') put('custom-css', customCss);
         put('updated', String(updated));
     });
@@ -744,7 +781,7 @@ function cache({ reading, customCss, themes }, updated) {
 function pushToAccount(bridge, updated) {
     if (!bridge || !appearanceAccount) return;
     const settings = bridge.extensionSettings();
-    settings.tavernLite = { ...(settings.tavernLite ?? {}), customCss: cachedCss(), reading: cachedReading(), themes: cachedThemes(), themeUpdated: updated };
+    settings.tavernLite = { ...(settings.tavernLite ?? {}), customCss: cachedCss(), reading: cachedReading(), themes: cachedThemes(), fonts: cachedFonts(), themeUpdated: updated };
     const display = reconcileDisplay(readDisplay(), settings.tavernLite.display, cachedReading());
     if (appearanceAccount) {
         // Migration is local only: a stale device must never publish an inferred value over an explicit choice.
@@ -779,6 +816,26 @@ export function deleteTheme(id, bridge) {
     saveAppearance({ themes, reading: reading.theme === `custom:${id}` ? { ...reading, theme: DEFAULT_READING.theme } : reading }, bridge);
 }
 
+/** Adds a font to the list. Null when it cannot be used safely in a stylesheet. */
+export function saveFont(font, bridge) {
+    const cleaned = cleanFont(font);
+    if (cleaned) {
+        const fonts = cachedFonts();
+        const existing = fonts.find(f => sameFont(f, cleaned));
+        if (existing) return existing;
+        const others = fonts.filter(f => f.id !== cleaned.id);
+        if (others.length >= MAX_FONTS) throw new Error(`最多 ${MAX_FONTS} 个字体，先删掉不用的`);
+        saveAppearance({ fonts: [...others, cleaned] }, bridge);
+    }
+    return cleaned;
+}
+
+export function deleteFont(id, bridge) {
+    const fonts = cachedFonts().filter(f => f.id !== id);
+    const reading = cachedReading();
+    saveAppearance({ fonts, reading: reading.font === `custom:${id}` ? { ...reading, font: DEFAULT_READING.font } : reading }, bridge);
+}
+
 /** Reconciles this browser with the account once the full app is ready: the newer copy wins, so themes follow the account across devices. */
 export function syncAppearanceWithAccount(bridge) {
     const settings = bridge?.extensionSettings();
@@ -798,9 +855,11 @@ export function syncAppearanceWithAccount(bridge) {
     }
     if (remoteUpdated > localUpdated) {
         const themes = Array.isArray(remote.themes) ? remote.themes.map(cleanTheme).filter(Boolean) : undefined;
+        const fonts = Array.isArray(remote.fonts) ? remote.fonts.map(cleanFont).filter(Boolean) : undefined;
         cache({
             themes,
-            reading: remote.reading ? clean(remote.reading, themes ?? cachedThemes()) : undefined,
+            fonts,
+            reading: remote.reading ? clean(remote.reading, themes ?? cachedThemes(), fonts ?? cachedFonts()) : undefined,
             customCss: typeof remote.customCss === 'string' ? remote.customCss : undefined,
         }, remoteUpdated);
         applyReading(cachedReading());

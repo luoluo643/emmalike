@@ -129,13 +129,11 @@
     /* The shelf's theme entry sits in the title's corner, out of the way of whatever a theme does with the buttons. */
     .tl-library > .tl-header { position: relative; }
     .tl-library > .tl-header > .tl-theme-entry {
+        min-width: 44px;
         position: absolute;
         z-index: 21;
         top: calc(max(10px, env(safe-area-inset-top)) - 6px);
         right: -6px;
-    }
-    @media (min-width: 421px) {
-        .tl-library > .tl-header { padding-right: 48px; }
     }
 
     /* Theme picker: the app behind shows the theme; only the bars and the strip sit on top, like choosing a wallpaper. */
@@ -467,6 +465,11 @@
         padding-inline: 0;
     }
 
+    /* Reserve the theme button's hit area after the shared padding reset. */
+    @media (min-width: 481px) {
+        .tl-library > .tl-header { padding-right: 48px; }
+    }
+
     .tl-section {
         display: grid;
         gap: 10px;
@@ -528,10 +531,13 @@
     .tl-library > .tl-header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
     .tl-library > .tl-header > .tl-spacer { display: none; }
     .tl-library .tl-title { white-space: nowrap; font-size: 1.2em; }
-    @media (max-width: 420px) {
-        .tl-library > .tl-header { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    @media (max-width: 480px) {
+        .tl-library > .tl-header { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(44px, auto) auto; }
+        .tl-library > .tl-header > .tl-theme-entry { top: max(10px, env(safe-area-inset-top)); }
         .tl-library .tl-title { grid-column: 1 / -1; font-size: 1em; }
         .tl-library > .tl-header > button { padding-inline: 8px; min-width: 0; }
+    }
+    @media (max-width: 420px) {
         .tl-continue-compact .tl-card-text { grid-template-columns: minmax(0, 1fr); }
     }
 
@@ -737,7 +743,10 @@
 
     .tl-jump-latest { align-self: center; flex-shrink: 0; margin: 4px 12px; }
     .tl-source-highlight { outline: 2px solid var(--tl-accent); outline-offset: 6px; }
-    .tl-selection-collect { align-self: center; flex-shrink: 0; }
+    .tl-selection-actions { align-self: center; flex-shrink: 0; display: flex; gap: 8px; }
+    .tl-select-share { margin: 0 16px 12px; }
+    .tl-update-notes { max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; line-height: 1.7; }
+    .tl-update-notes ul { margin: 2px 0 10px; padding-left: 1.2em; }
     .tl-personal-notice { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 12px; background: var(--tl-surface); font-size: 0.8em; }
     .tl-personal-notice > span { flex: 1 1 160px; }
     .tl-personal-text { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; line-height: 1.8; }
@@ -1339,6 +1348,9 @@
         width: min(560px, 100%);
         max-height: 82vh;
         overflow-y: auto;
+        /* overflow-y alone makes the other axis scrollable too: one long word and the whole menu moved sideways. */
+        overflow-x: hidden;
+        overflow-wrap: anywhere;
         background: var(--tl-bg);
         color: var(--tl-text);
         border-radius: 22px 22px 0 0;
@@ -1376,7 +1388,12 @@
 
     .tl-sheet-body {
         display: grid;
+        grid-template-columns: minmax(0, 1fr);
         padding-bottom: 8px;
+    }
+
+    .tl-sheet-body > .tl-choices, .tl-share-fields > .tl-choices {
+        padding-inline: 16px;
     }
 
     /* Choice lists inside a sheet stretch like the sheet's own rows (a button alone would shrink to its text). */
@@ -1958,6 +1975,15 @@
         border-top: 1px solid var(--tl-border);
     }
 
+    .tl-font-picker, .tl-font-link {
+        display: grid;
+        gap: 10px;
+    }
+
+    .tl-font-remove {
+        justify-self: start;
+    }
+
     .tl-settings-label {
         font-size: 0.85em;
         color: var(--tl-text-muted);
@@ -1967,6 +1993,30 @@
     @media (max-width: 759px) {
         .tl-width-group {
             display: none;
+        }
+
+        /* On a phone menus only move up and down: what used to be a sideways row wraps instead. */
+        .tl-sheet {
+            touch-action: pan-y pinch-zoom;
+            overscroll-behavior-x: none;
+        }
+
+        .tl-theme-strip:not(.tl-picker-strip) {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
+            overflow-x: visible;
+            margin-inline: 0;
+            padding-inline: 0;
+            scroll-snap-type: none;
+        }
+
+        .tl-theme-strip:not(.tl-picker-strip) .tl-theme-card {
+            justify-self: center;
+        }
+
+        .tl-chips:not(.tl-input-buttons, .tl-library *) {
+            flex-wrap: wrap;
+            overflow-x: visible;
         }
     }
 

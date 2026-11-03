@@ -1,8 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hasShortNames, hideInText, hideNames, readerNames, roundAt, storyRounds, summarize } from '../src/share-model.js';
+import { bySpeaker, floorAt, floorLabel, hasShortNames, hideInRuns, hideInText, hideNames, readerNames, roundAt, storyRounds, summarize } from '../src/share-model.js';
 
 const msg = (index, user, mes, name = user ? '阿青' : '林小满') => ({ index, user, name, mes });
+
+test('themed names are hidden across inline styles without changing surrounding styles', () => {
+    const source = [[{ text: '你好，阿', kind: 'text' }, { text: '青', kind: 'strong' }, { text: '，慢慢来。', kind: 'em' }]];
+    const before = JSON.stringify(source);
+    assert.deepEqual(hideInRuns(source, ['阿青']), [[{ text: '你好，■■', kind: 'text' }, { text: '，慢慢来。', kind: 'em' }]]);
+    assert.equal(JSON.stringify(source), before);
+});
+
+test('styled masking agrees with plain masking for overlapping names, emoji and paragraphs', () => {
+    const source = [[{ text: '青青', kind: 'quote' }, { text: '阿青与A.', kind: 'em' }, { text: 'B 👩', kind: 'strong' }, { text: '青', kind: 'text' }], [], [{ text: '青山\n阿青', kind: 'quote' }]];
+    const plain = runs => runs.map(p => p.map(r => r.text).join('')).join('\n');
+    const names = ['阿青', '青青阿青', 'A.B', '👩青', '青'];
+    assert.equal(plain(hideInRuns(source, names)), hideInText(plain(source), names));
+    assert.deepEqual(hideInRuns([[]], names), [[]]);
+});
 
 test('a story is cut into rounds that start at the reader\'s messages, the greeting being round 0', () => {
     const rounds = storyRounds([msg(0, false, '你好呀'), msg(1, true, '去河边'), msg(2, false, '好'), msg(3, false, '（又说）'), msg(5, true, '回家')]);
@@ -53,4 +68,16 @@ test('a one-character name is hidden over messages only, and names with symbols 
     assert.equal(hasShortNames(['青', '阿青']), true);
     assert.equal(hasShortNames(['阿青']), false);
     assert.equal(hideInText('林小满 · 第 1 个故事', []), '林小满 · 第 1 个故事');
+});
+
+test('floors: numbered like the full app, found by index, one side only', () => {
+    const list = [msg(0, false, '你好呀'), msg(1, true, '去河边'), msg(2, false, '好'), msg(5, true, '回家')];
+    assert.equal(floorLabel({ ...list[1], name: '阿青' }), '#1 阿青：去河边');
+    assert.equal(floorLabel({ index: 3, name: '他', mes: '<p></p>' }), '#3 他：（没有文字）');
+    assert.equal(floorAt(list, 2), 2);
+    assert.equal(floorAt(list, 3), 3, 'a hidden or missing index falls to the next floor');
+    assert.equal(floorAt(list, 99), 3);
+    assert.deepEqual(bySpeaker(list, 'char').map(m => m.index), [0, 2]);
+    assert.deepEqual(bySpeaker(list, 'user').map(m => m.index), [1, 5]);
+    assert.equal(bySpeaker(list, 'all').length, 4);
 });

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import * as engine from './engine.js';
-import { HELPER, checkUpdate, helperStatus, installHelper, updateLite } from './upkeep.js';
+import { HELPER, checkUpdate, helperStatus, installHelper, releaseNotes, updateLite } from './upkeep.js';
 import { Sheet, SheetItem, friendlyError } from './ui.jsx';
 
 const reload = () => location.reload();
@@ -49,6 +49,33 @@ export function HelperSheet({ notify, onClose }) {
     );
 }
 
+/** What the newer version changed, so updating can wait when nothing in it is wanted. */
+function UpdateNotes({ state }) {
+    const [notes, setNotes] = useState(undefined);
+    useEffect(() => { releaseNotes(state).then(setNotes).catch(() => setNotes(null)); }, [state]);
+    return (
+        <>
+            <p class="tl-sheet-section">这次更新了什么</p>
+            {notes === undefined && <p class="tl-muted tl-sheet-note">正在读更新说明…</p>}
+            {notes?.length > 0 && (
+                <div class="tl-sheet-note tl-update-notes">
+                    {notes.map(note => (
+                        <section key={note.version}>
+                            <strong>{note.version}</strong>
+                            <ul>{note.items.map(item => <li>{item}</li>)}</ul>
+                        </section>
+                    ))}
+                </div>
+            )}
+            {(notes === null || notes?.length === 0) && (
+                <p class="tl-muted tl-sheet-note">
+                    没读到这次的更新说明{state.historyUrl && <>，可以<a href={state.historyUrl} target="_blank" rel="noopener">在 GitHub 上看改动记录</a></>}
+                </p>
+            )}
+        </>
+    );
+}
+
 /** Checks the repository tavern-lite was installed from and updates it in place. */
 export function UpdateSheet({ notify, onClose }) {
     const [state, setState] = useState(null);
@@ -69,8 +96,9 @@ export function UpdateSheet({ notify, onClose }) {
             {state?.kind === 'current' && !updated && <p class="tl-muted tl-sheet-note">已是最新版本</p>}
             {state?.kind === 'manual' && <p class="tl-muted tl-sheet-note">这份轻酒馆不是从 GitHub 安装的，没法在这里更新，请按原来的安装方式替换文件</p>}
             {state?.kind === 'forbidden' && <p class="tl-muted tl-sheet-note">有新版本{state.remoteVersion ? ` ${state.remoteVersion}` : ''}，需要管理员来更新</p>}
+            {(state?.kind === 'available' || state?.kind === 'forbidden') && !updated && <UpdateNotes state={state} />}
             {state?.kind === 'available' && !updated && (
-                <SheetItem label={`更新到新版本${state.remoteVersion ? ` ${state.remoteVersion}` : ''}`} hint="聊天记录和设置不受影响"
+                <SheetItem label={`更新到新版本${state.remoteVersion ? ` ${state.remoteVersion}` : ''}`} hint="看过上面的改动再决定；聊天记录和设置不受影响"
                     busy={updating} busyLabel="正在更新…" disabled={updating || engine.isGenerating()} onClick={update} />
             )}
             {updated && (

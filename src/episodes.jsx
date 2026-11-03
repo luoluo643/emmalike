@@ -17,9 +17,11 @@ export function episodeIdentity(metadata, account) {
         type: parsed.kind === 'absent' ? '普通故事' : '来源没确认', episode: null };
 }
 
+// An ordinary story is just its name; only 番外, 平行线 and the like say what they are.
 export function storyIdentityLabel(chapter, characterName, numbers, account) {
     const identity = episodeIdentity(chapter?.chat_metadata, account);
-    return `${identity.type} · ${identity.title || chapterLabel(chatId(chapter?.file_name), characterName, numbers)}`;
+    const name = identity.title || chapterLabel(chatId(chapter?.file_name), characterName, numbers);
+    return identity.kind === 'ordinary' ? name : `${identity.type} · ${name}`;
 }
 
 export function EpisodeTag({ metadata, account }) {
@@ -320,7 +322,7 @@ export function EpisodesSheet({ account, scope, characterName, currentTitle, dra
     const filtered = candidates.filter(node => `${node.episode.title} ${node.episode.openingRequest || ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
     const copyTargets = [...(graph?.roots || []), ...(graph?.nodes || []), ...(graph?.ordinaryChats || [])]
         .filter((node, index, all) => all.findIndex(other => sameFile(node.locator, other.locator)) === index && node.locator.account === account);
-    const here = current?.episode ? labelFor(current) : currentTitle || '普通故事';
+    const here = current?.episode ? labelFor(current) : currentTitle || '这个故事';
     const rootReady = isChild && current.relationship === 'resolved' && !!current.rootLocator;
     // Where a line leaves the 正文 (the message it copied up to, or the part split out).
     const forkPlace = node => {
@@ -356,7 +358,7 @@ export function EpisodesSheet({ account, scope, characterName, currentTitle, dra
         </div>}
         {copying !== null ? <section class="tl-episode-section">
             <h3>把请求放进别的故事</h3><p class="tl-muted">只放进那个故事的输入框，不自动发送</p>
-            {copyTargets.map(node => <SheetItem key={node.locator.file} disabled={busy} label={node.episode ? labelFor(node) : `普通故事 · ${node.locator.file}`} onClick={() => copyTo(node.locator)} />)}
+            {copyTargets.map(node => <SheetItem key={node.locator.file} disabled={busy} label={node.episode ? labelFor(node) : node.locator.file} onClick={() => copyTo(node.locator)} />)}
             <button class="tl-button" disabled={busy} onClick={() => setCopying(null)}>取消复制</button>
         </section> : <>
             {mode === 'list' && unfinished.length > 0 && <section class="tl-episode-section tl-episode-attention"><h3>需要你看一下</h3>

@@ -2,7 +2,7 @@
  * UI-02/04/06/07/08/09/11 acceptance against the PURE ST 1.19.0 isolate only.
  * Fixed address: 127.0.0.1:8032 + default-user/test1234.
  * Usage: node tests/e2e-ui-appearance.mjs /tmp/ui-appearance-proof
- * Optional: --cases=migration,scope,layout,colors,preview,presets,performance,horde
+ * Optional: --cases=header,migration,scope,layout,colors,preview,presets,performance,horde
  * PLAYWRIGHT_CORE and CHROME_PATH may locate an installed headless Chromium.
  * Real shell/native UI, temporary real characters/chats, browser-only settings and
  * presets, intercepted model responses. No real model request or account save.
@@ -22,7 +22,7 @@ const options = process.argv.slice(2), outputArg = options.find(x => !x.startsWi
 assert(outputArg && !outputArg.includes('://'), 'Supply an evidence directory, never a target URL.');
 assert(options.every(x => x === outputArg || x.startsWith('--cases=')), 'Unknown argument.');
 const cases = (options.find(x => x.startsWith('--cases='))?.slice(8) || 'migration,scope,layout,colors,preview,presets,performance,horde').split(',');
-const known = ['migration', 'scope', 'layout', 'colors', 'preview', 'presets', 'performance', 'horde'];
+const known = ['header', 'migration', 'scope', 'layout', 'colors', 'preview', 'presets', 'performance', 'horde'];
 assert(cases.every(x => known.includes(x)) && new Set(cases).size === cases.length);
 const output = resolve(outputArg), run = `${Date.now().toString(36)}-${process.pid}`;
 await mkdir(output, { recursive: true });
@@ -451,9 +451,9 @@ async function scope(result) {
     assert.equal(values.a.fontSize, 26); assert.equal(values.b.fontSize, 19);
     result.checks.push({ name: 'simulated-account-A/B-legacy-default-and-explicit-preferences', values, category: report.categories.scope });
 }
-async function layout(result) {
+async function header(result) {
     const s = await session(result); await ready(s);
-    for (const [width, height] of [[320, 640], [390, 844], [1440, 1000]]) {
+    for (const [width, height] of [[320, 640], [390, 844], [421, 844], [430, 844], [480, 844], [481, 844], [1440, 1000]]) {
         await s.page.setViewportSize({ width, height });
         for (const ui of [17, 26]) {
             await setUi(s, ui);
@@ -466,9 +466,8 @@ async function layout(result) {
                 assert(title.height <= parseFloat(title.lineHeight) * 1.25, 'Brand broke into multiple lines.');
                 const sizes = await noHorizontalOverflow(s);
                 const controls = await s.page.locator('.tl-library > .tl-header > button').evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, label: e.textContent }; }));
-                assert.equal(controls.length, 2); assert(controls.every(b => b.width >= 44 && b.height >= 40 && b.x + b.width <= width + 1));
-                const [a, b] = controls;
-                assert(a.x + a.width <= b.x + 1 || b.x + b.width <= a.x + 1 || a.y + a.height <= b.y + 1 || b.y + b.height <= a.y + 1, 'Header action boxes overlap.');
+                assert.equal(controls.length, 3); assert(controls.every(b => b.width >= 44 && b.height >= 40 && b.x + b.width <= width + 1), `Header controls at ${width}px, UI ${ui}: ${JSON.stringify(controls)}`);
+                for (const [i, a] of controls.entries()) for (const b of controls.slice(i + 1)) assert(a.x + a.width <= b.x + 1 || b.x + b.width <= a.x + 1 || a.y + a.height <= b.y + 1 || b.y + b.height <= a.y + 1, 'Header action boxes overlap.');
                 result.checks.push({ name: `shelf-${width}-${ui}-${recent}`, sizes, title, controls });
                 await shot(s, `shelf-${width}-${ui}-${recent}`);
                 // Same component route must be unmounted before changing its next fetched recent fixture.
@@ -476,10 +475,16 @@ async function layout(result) {
             }
         }
     }
+    return s;
+}
+async function layout(result) {
+    const s = await header(result);
     await s.page.setViewportSize({ width: 390, height: 844 }); await setUi(s, 17);
     const r = await openReading(s), group = await layoutFacts(s, '.tl-theme-strip');
-    const cards = await r.getByRole('radiogroup', { name: '主题', exact: true }).getByRole('radio').evaluateAll(els => els.map(el => { const b = el.getBoundingClientRect(); return { top: b.top, height: b.height }; }));
-    assert(cards.length >= 8); assert(group.height <= Math.max(...cards.map(x => x.height)) + parseFloat(group.paddingTop) + parseFloat(group.paddingBottom) + 2 && Math.abs(cards[0].top - cards[1].top) < 2, `Theme strip became vertical rows: ${JSON.stringify({ group, cards })}`);
+    const cards = await r.getByRole('radiogroup', { name: '主题', exact: true }).getByRole('radio').evaluateAll(els => els.map(el => { const b = el.getBoundingClientRect(); return { top: b.top, height: b.height, left: b.left, right: b.right }; }));
+    assert(cards.length >= 8);
+    // On a phone the theme cards wrap: the sheet only moves up and down.
+    assert(cards.every(card => card.left >= 0 && card.right <= 390), 'A theme card sticks out sideways.');
     const font = await r.getByRole('slider', { name: '字号', exact: true }).boundingBox(), panel = await r.boundingBox();
     assert(font.y >= panel.y && font.y + font.height <= Math.min(panel.y + panel.height, 844), 'Font control starts below viewport.');
     assert.equal(await r.getByRole('radiogroup', { name: '字体', exact: true }).isVisible(), false);
@@ -638,8 +643,8 @@ async function horde(result) {
 
 try {
     await environment();
-    if (cases.some(x => ['layout', 'colors', 'performance'].includes(x))) await makeFixtures();
-    const handlers = { migration, scope, layout, colors, preview, presets, performance: result => performanceCase(result, { session, ready, fixtures, sheet, hitbox, openReading, closeSheet, shot, output, run, modelText }), horde };
+    if (cases.some(x => ['header', 'layout', 'colors', 'performance'].includes(x))) await makeFixtures();
+    const handlers = { header, migration, scope, layout, colors, preview, presets, performance: result => performanceCase(result, { session, ready, fixtures, sheet, hitbox, openReading, closeSheet, shot, output, run, modelText }), horde };
     for (const name of cases) await runCase(name, handlers[name]);
 } catch (error) { failures++; report.fatal = String(error.stack || error); await log('fatal', { error: report.fatal }); }
 finally {

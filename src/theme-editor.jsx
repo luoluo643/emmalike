@@ -3,9 +3,10 @@ import * as api from './api.js';
 import * as engine from './engine.js';
 import { Icon } from './icons.jsx';
 import {
-    FONTS, PRESETS, SNIPPETS, applyReading, cachedReading, cachedThemes, deleteTheme, exportTheme, hasSnippet, luminance,
+    PRESETS, SNIPPETS, applyReading, cachedReading, cachedThemes, deleteTheme, exportTheme, hasSnippet, luminance,
     newThemeId, readableOn, saveTheme, themeVars, toggleSnippet,
 } from './theme.js';
+import { FontPicker } from './font-picker.jsx';
 import { Choices, ConfirmSheet, PageHeader, Sheet, Spinner, downloadFile, friendlyError, Loading } from './ui.jsx';
 
 const COLORS = [
@@ -243,8 +244,8 @@ export function ThemeEditor({ id, base, notify, onDone }) {
 
             <section class="tl-section">
                 <h2 class="tl-section-title">字体</h2>
-                <Choices label="主题字体" options={FONTS} value={theme.font} onChange={font => change({ font })} />
-                <p class="tl-muted tl-choice-hint">「阅读设置」里选了字体的话，以那里为准</p>
+                <FontPicker label="主题字体" value={theme.font} onChange={font => change({ font })} />
+                <p class="tl-muted tl-choice-hint">「阅读设置」里选了字体的话，以那里为准。分享主题时不带自己添加的字体</p>
             </section>
 
             <section class="tl-section">

@@ -1,34 +1,80 @@
 // Sharing part of a story: as text (copied or saved) or as a long picture drawn in the reader's colours. Loaded only
 // when used (see reader.jsx).
-import { useMemo, useState } from 'preact/hooks';
+import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import * as engine from './engine.js';
-import { NAME_MASK, hasShortNames, hideInText, hideNames, readerNames, roundAt, storyRounds } from './share-model.js';
-import { copyText, EngineWait, Sheet, SheetItem, useEngine } from './ui.jsx';
+import { NAME_MASK, bySpeaker, floorAt, floorLabel, hasShortNames, hideInRuns, hideInText, hideNames, readerNames, storyRounds, summarize } from './share-model.js';
+import { checkActive, waitForPictureFonts } from './share-dom.js';
+import { Choices, copyText, EngineWait, Sheet, SheetItem, useEngine } from './ui.jsx';
 
 const RECENT_ROUNDS = 10;
 const HIDE_NAME_KEY = 'tavern-lite:share-hide-name';
+const THEMED_KEY = 'tavern-lite:share-theme-colors';
 const IMAGE_WIDTH = 1080;
 // Phones refuse canvases much taller than this (iOS limits the area), so a long story becomes several pictures.
 const PAGE_HEIGHT = 14000;
 const BLOCKS = /^(P|DIV|BLOCKQUOTE|LI|UL|OL|H[1-6]|PRE|TABLE|TR|HR|SECTION|ARTICLE|Q)$/;
+// What the reader colours inside a message (styles.css: .tl-message-body q / em / strong); the innermost one wins.
+const STYLED = { Q: 'quote', EM: 'em', I: 'em', STRONG: 'strong', B: 'strong' };
+
+/** Walks a rendered message: frontend cards, folded blocks and styles left out; `emit(text, kind)` gets the words. */
+function walkHtml(html, emit) {
+    const doc = new DOMParser().parseFromString(`<body>${html ?? ''}</body>`, 'text/html');
+    doc.body.querySelectorAll('.tl-frontend-card, .tl-card-placeholder, details, style, script, iframe, button').forEach(el => el.remove());
+    let atLineStart = true;
+    const say = (text, kind) => {
+        if (!text) return;
+        emit(text, kind);
+        atLineStart = text.endsWith('\n');
+    };
+    const walk = (node, kind) => {
+        if (node.nodeType === 3) { say(node.textContent, kind); return; }
+        if (node.nodeType !== 1) return;
+        if (node.tagName === 'BR') { say('\n', 'text'); return; }
+        const block = BLOCKS.test(node.tagName);
+        if (block && !atLineStart) say('\n', 'text');
+        for (const child of node.childNodes) walk(child, STYLED[node.tagName] ?? kind);
+        if (block && !atLineStart) say('\n', 'text');
+    };
+    walk(doc.body, 'text');
+}
 
 /** The text of a rendered message: paragraphs kept, frontend cards, folded blocks and styles left out. */
 export function htmlToText(html) {
-    const doc = new DOMParser().parseFromString(`<body>${html ?? ''}</body>`, 'text/html');
-    doc.body.querySelectorAll('.tl-frontend-card, .tl-card-placeholder, details, style, script, iframe, button').forEach(el => el.remove());
     let out = '';
-    const walk = node => {
-        if (node.nodeType === 3) { out += node.textContent; return; }
-        if (node.nodeType !== 1) return;
-        if (node.tagName === 'BR') { out += '\n'; return; }
-        const block = BLOCKS.test(node.tagName);
-        if (block && out && !out.endsWith('\n')) out += '\n';
-        for (const child of node.childNodes) walk(child);
-        if (block && !out.endsWith('\n')) out += '\n';
-    };
-    walk(doc.body);
+    walkHtml(html, text => { out += text; });
     return out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
+
+/**
+ * The same text as paragraphs of runs ({ text, kind }: 'text', 'quote', 'em' or 'strong'), tidied exactly like
+ * htmlToText, so a themed picture has the same words as a plain one.
+ */
+export function htmlToRuns(html) {
+    const chars = [];
+    walkHtml(html, (text, kind) => { for (const ch of text) chars.push({ ch, kind }); });
+    const tidy = [];
+    for (const c of chars) {
+        if (c.ch === '\n') {
+            while (tidy.length && /[ \t]/.test(tidy.at(-1).ch)) tidy.pop();
+            if (tidy.length >= 2 && tidy.at(-1).ch === '\n' && tidy.at(-2).ch === '\n') continue;
+        }
+        tidy.push(c);
+    }
+    let from = 0, to = tidy.length;
+    while (from < to && /\s/.test(tidy[from].ch)) from++;
+    while (to > from && /\s/.test(tidy[to - 1].ch)) to--;
+    const paragraphs = [[]];
+    for (const { ch, kind } of tidy.slice(from, to)) {
+        if (ch === '\n') { paragraphs.push([]); continue; }
+        const runs = paragraphs.at(-1);
+        if (runs.at(-1)?.kind === kind) runs.at(-1).text += ch;
+        else runs.push({ text: ch, kind });
+    }
+    return paragraphs;
+}
+
+/** Plain text as paragraphs of one run each. */
+const plainRuns = text => String(text).split('\n').map(line => line ? [{ text: line, kind: 'text' }] : []);
 
 /** Every message a reader would see in the story (the app's own notes left out), not yet turned into text. */
 function storyItems(bridge) {
@@ -38,10 +84,10 @@ function storyItems(bridge) {
         .map(m => ({ index: m.index, name: m.name, user: m.is_user, mes: m.mes, html: m.html }));
 }
 
-/** The shared messages as text; only the chosen rounds are converted, so a long story stays quick to share. */
-function sharedMessages(rounds) {
-    return rounds.flatMap(r => r.messages)
-        .map(m => ({ name: m.name, user: m.user, text: htmlToText(m.html ?? m.mes) }))
+/** The shared messages as text; only the chosen ones are converted, so a long story stays quick to share. */
+function sharedMessages(items) {
+    return items
+        .map(m => ({ name: m.name, user: m.user, html: m.html ?? m.mes, text: htmlToText(m.html ?? m.mes) }))
         .filter(m => m.text);
 }
 
@@ -53,8 +99,6 @@ function writeSetting(key, on) {
     try { localStorage.setItem(key, on ? '1' : '0'); } catch { /* storage unavailable: kept for this time only */ }
 }
 
-const roundLabel = round => `${round.number ? `第 ${round.number} 轮` : '开场'} · ${round.summary || '（没有文字）'}`;
-
 function asText(title, messages) {
     return `${title}\n\n${messages.map(m => `${m.name}：\n${m.text}`).join('\n\n')}\n`;
 }
@@ -62,45 +106,72 @@ function asText(title, messages) {
 // --- Long picture ---------------------------------------------------------------------------------------------
 
 const NO_LINE_START = /^[，。！？、；：,.!?;:」』）)】》〉”’…—]/;
-const TOKENS = /[⺀-鿿豈-﫿　-〿＀-￯]|[^\s⺀-鿿豈-﫿　-〿＀-￯]+|[ \t]+/g;
+const TOKENS = /[⺀-鿿豈-﫿　-〿＀-￯]|[^\s⺀-鿿豈-﫿　-〿＀-￯]+|[ \t]+/g;
+const SPACE = /^[ \t]+$/;
 
-function wrap(ctx, text, width) {
+/** Breaks paragraphs of runs into lines of runs no wider than `width`; `font(kind)` is the font each run is drawn in. */
+function wrap(ctx, paragraphs, width, font) {
+    const measure = (text, kind) => { ctx.font = font(kind); return ctx.measureText(text).width; };
     const lines = [];
-    for (const paragraph of text.split('\n')) {
-        let line = '';
-        for (let token of paragraph.match(TOKENS) ?? []) {
-            if (!line && /^[ \t]+$/.test(token)) continue;
-            if (ctx.measureText(line + token).width <= width || (NO_LINE_START.test(token) && line)) {
-                line += token;
-                continue;
+    for (const runs of paragraphs) {
+        let line = [], used = 0;
+        const add = token => {
+            if (line.at(-1)?.kind === token.kind) line.at(-1).text += token.text;
+            else line.push({ ...token });
+            used += measure(token.text, token.kind);
+        };
+        const close = () => {
+            const end = line.at(-1);
+            if (end) end.text = end.text.trimEnd();
+            lines.push(line.filter(r => r.text));
+            line = [];
+            used = 0;
+        };
+        for (const run of runs) {
+            for (const text of run.text.match(TOKENS) ?? []) {
+                let token = { text, kind: run.kind };
+                if (!line.length && SPACE.test(token.text)) continue;
+                if (used + measure(token.text, token.kind) <= width || (NO_LINE_START.test(token.text) && line.length)) {
+                    add(token);
+                    continue;
+                }
+                // A word longer than the line is cut where it has to be.
+                while (measure(token.text, token.kind) > width) {
+                    let cut = token.text.length - 1;
+                    while (cut > 1 && measure(token.text.slice(0, cut), token.kind) > width) cut--;
+                    if (line.length) close();
+                    lines.push([{ text: token.text.slice(0, cut), kind: token.kind }]);
+                    token = { text: token.text.slice(cut), kind: token.kind };
+                }
+                if (line.length) close();
+                if (!SPACE.test(token.text)) add(token);
             }
-            // A word longer than the line is cut where it has to be.
-            while (ctx.measureText(token).width > width) {
-                let cut = token.length - 1;
-                while (cut > 1 && ctx.measureText(token.slice(0, cut)).width > width) cut--;
-                if (line) lines.push(line);
-                line = '';
-                lines.push(token.slice(0, cut));
-                token = token.slice(cut);
-            }
-            if (line) lines.push(line.trimEnd());
-            line = /^[ \t]+$/.test(token) ? '' : token;
         }
         lines.push(line);
     }
     return lines;
 }
 
-function themeColors() {
+function themeColors(themed) {
     const style = getComputedStyle(document.documentElement);
-    const read = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+    const read = (name, fallback) => {
+        const value = style.getPropertyValue(name).trim();
+        // "inherit" and the like are valid CSS but mean nothing on a canvas.
+        return value && CSS.supports('color', value) && !/^(inherit|initial|unset|revert|currentcolor)/i.test(value) ? value : fallback;
+    };
     const font = getComputedStyle(document.querySelector('.tl-message-body') ?? document.body).fontFamily || 'sans-serif';
+    const text = read('--tl-text', '#e8e2d9'), accent = read('--tl-accent', '#d0a676');
     return {
         bg: read('--tl-bg', '#1c1b1f'),
-        text: read('--tl-text', '#e8e2d9'),
+        text,
         muted: read('--tl-text-muted', '#9c958b'),
-        accent: read('--tl-accent', '#d0a676'),
+        accent,
         font,
+        // Without the theme's colours every run is the body colour, as pictures always were.
+        name: themed ? read('--tl-name-color', accent) : accent,
+        runs: themed ? { text, quote: read('--tl-quote', text), em: read('--tl-em', text), strong: read('--tl-strong', text) }
+            : { text, quote: text, em: text, strong: text },
+        themed,
     };
 }
 
@@ -113,27 +184,31 @@ function isLight(ctx, color) {
 }
 
 /** Lays the story out as drawing commands, then paints them onto as many pages as it needs. */
-async function asPictures(title, messages) {
-    const colors = themeColors();
+async function asPictures(title, messages, themed, { font, signal } = {}) {
+    checkActive(signal);
+    const colors = themeColors(themed);
+    if (font) colors.font = font;
     const scratch = document.createElement('canvas').getContext('2d');
     const pad = 72, width = IMAGE_WIDTH - pad * 2;
     const body = { size: 40, height: 70 }, name = { size: 30, height: 52 }, head = { size: 56, height: 84 };
+    const bodyFont = kind => !colors.themed ? `${body.size}px ${colors.font}`
+        : kind === 'em' ? `italic ${body.size}px ${colors.font}` : kind === 'strong' ? `600 ${body.size}px ${colors.font}` : `${body.size}px ${colors.font}`;
     const items = [];
     let y = pad;
-    scratch.font = `600 ${head.size}px ${colors.font}`;
-    for (const line of wrap(scratch, title, width)) {
-        items.push({ y, text: line, font: `600 ${head.size}px ${colors.font}`, color: colors.text });
+    for (const line of wrap(scratch, plainRuns(title), width, () => `600 ${head.size}px ${colors.font}`)) {
+        items.push({ y, runs: line, font: () => `600 ${head.size}px ${colors.font}`, color: () => colors.text });
         y += head.height;
     }
     items.push({ y: y + 10, rule: true });
     y += 56;
     for (const message of messages) {
-        items.push({ y, text: message.name, font: `${name.size}px ${colors.font}`, color: message.user ? colors.muted : colors.accent });
+        items.push({ y, runs: [{ text: message.name, kind: 'text' }], font: () => `${name.size}px ${colors.font}`, color: () => message.user ? colors.muted : colors.name });
         y += name.height;
-        scratch.font = `${body.size}px ${colors.font}`;
-        for (const line of wrap(scratch, message.text, width)) {
-            if (line) items.push({ y, text: line, font: `${body.size}px ${colors.font}`, color: colors.text });
-            y += line ? body.height : body.height * 0.5;
+        const paragraphs = colors.themed && message.html ? hideInRuns(htmlToRuns(message.html), message.hiddenNames ?? [])
+            : plainRuns(message.text);
+        for (const line of wrap(scratch, paragraphs, width, bodyFont)) {
+            if (line.length) items.push({ y, runs: line, font: bodyFont, color: kind => colors.runs[kind] ?? colors.text });
+            y += line.length ? body.height : body.height * 0.5;
         }
         y += 40;
     }
@@ -151,6 +226,7 @@ async function asPictures(title, messages) {
     }
     const files = [];
     for (const [index, [from, to]] of pages.entries()) {
+        checkActive(signal);
         const canvas = document.createElement('canvas');
         canvas.width = IMAGE_WIDTH;
         canvas.height = Math.ceil(to - from + (index === pages.length - 1 ? pad - 40 : 0));
@@ -169,11 +245,16 @@ async function asPictures(title, messages) {
                 ctx.fillRect(pad, top, 96, 4);
                 continue;
             }
-            ctx.font = item.font;
-            ctx.fillStyle = item.color;
-            ctx.fillText(item.text, pad, top);
+            let x = pad;
+            for (const run of item.runs) {
+                ctx.font = item.font(run.kind);
+                ctx.fillStyle = item.color(run.kind);
+                ctx.fillText(run.text, x, top);
+                x += ctx.measureText(run.text).width;
+            }
         }
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        checkActive(signal);
         if (!blob) throw new Error('图太长了，手机画不出来，少选一些');
         files.push(new File([blob], `${title.replace(/[\\/:*?"<>|]/g, '')}${pages.length > 1 ? `-${index + 1}` : ''}.png`, { type: 'image/png' }));
     }
@@ -192,50 +273,65 @@ function saveFile(file) {
 }
 
 /** Phones share files through the system sheet (WeChat, gallery…); elsewhere they are downloaded. */
-async function hand(files) {
+async function hand(files, signal) {
+    checkActive(signal);
     if (navigator.canShare?.({ files })) {
         try {
             await navigator.share({ files });
             return 'shared';
         } catch (error) {
+            checkActive(signal);
             if (error?.name === 'AbortError') return 'cancelled';
         }
     }
-    for (const file of files) saveFile(file);
+    for (const file of files) { checkActive(signal); saveFile(file); }
     return 'saved';
 }
 
-export function ExportSheet({ character, chapterTitle, startIndex, notify, onClose }) {
+/**
+ * The share sheet. A range of floors (presets, or any start and end, of everyone or one side), or with `excerpt`
+ * ({ index, text, html }) just a passage selected inside one message.
+ */
+export function ExportSheet({ character, chapterTitle, startIndex, excerpt, notify, onClose }) {
     useEngine(); // Opened while the full app prepares: shown again once it is ready.
     const bridge = engine.getBridge();
-    const rounds = useMemo(() => bridge ? storyRounds(storyItems(bridge)) : [], [bridge]);
-    const last = rounds.length - 1;
+    const items = useMemo(() => bridge ? storyItems(bridge) : [], [bridge]);
+    const rounds = useMemo(() => storyRounds(items), [items]);
+    const last = items.length - 1;
     // Counted in the reader's rounds: the greeting before them is not one, but comes along with "整章".
     const readerRounds = rounds.filter(r => r.number > 0).length;
     const recent = Math.min(RECENT_ROUNDS, readerRounds);
+    const from = startIndex > 0 ? floorAt(items, startIndex) : -1;
     const presets = [
-        ...(startIndex > 0 ? [{ key: 'from', label: '从选中的这轮到最后', start: roundAt(rounds, startIndex), end: last }] : []),
-        ...(recent && recent < readerRounds ? [{ key: 'recent', label: `最近 ${recent} 轮`, start: rounds.length - recent, end: last }] : []),
+        ...(from >= 0 ? [{ key: 'from', label: `从 #${items[from]?.index} 到最后`, start: from, end: last }] : []),
+        ...(recent && recent < readerRounds ? [{ key: 'recent', label: `最近 ${recent} 轮`, start: floorAt(items, rounds[rounds.length - recent].from), end: last }] : []),
         { key: 'all', label: `整章（${readerRounds} 轮）`, start: 0, end: last },
     ];
     const [choice, setChoice] = useState(presets[0].key);
     const [picked, setPicked] = useState({ start: presets[0].start, end: presets[0].end });
+    const [who, setWho] = useState('all');
     const [hide, setHide] = useState(() => readSetting(HIDE_NAME_KEY));
+    const [themed, setThemed] = useState(() => readSetting(THEMED_KEY));
     const [busy, setBusy] = useState(false);
+    const task = useRef(null);
+    useLayoutEffect(() => () => task.current?.abort(), []);
+    const close = () => { task.current?.abort(); onClose(); };
     const preset = presets.find(p => p.key === choice);
     const start = Math.max(0, preset ? preset.start : picked.start);
     const end = Math.max(start, preset ? preset.end : picked.end);
-    const chosen = rounds.slice(start, end + 1);
-    const count = chosen.reduce((n, r) => n + r.messages.length, 0);
+    // What would really be shared: floors without any text are left out of the count as they are of the result.
+    const chosen = useMemo(() => bySpeaker(items.slice(start, end + 1), who).filter(m => htmlToText(m.html ?? m.mes)), [items, start, end, who]);
+    const nothing = !excerpt && !chosen.length;
+    const author = excerpt ? items.find(m => m.index === excerpt.index) ?? { index: excerpt.index, name: character.name, user: false } : null;
     const names = useMemo(() => {
         let current = '';
         try {
             const personas = bridge?.personaList?.();
             current = personas?.list?.find(p => p.id === personas.current)?.name ?? '';
         } catch { /* no persona list in this version: names from the messages only */ }
-        return readerNames(rounds.flatMap(r => r.messages), current);
-    }, [rounds]);
-    const roundName = r => r?.number ? `第 ${r.number} 轮` : '开场';
+        return readerNames(items, current);
+    }, [items]);
+    const speakers = { all: { label: '都要' }, char: { label: `只要${character.name}` }, user: { label: '只要我' } };
 
     const pick = (key, value) => {
         const next = { start, end, [key]: Number(value) };
@@ -243,89 +339,112 @@ export function ExportSheet({ character, chapterTitle, startIndex, notify, onClo
         if (key === 'end' && next.start > next.end) next.start = next.end;
         setPicked(next);
     };
-    const toggleHide = () => {
-        writeSetting(HIDE_NAME_KEY, !hide);
-        setHide(!hide);
+    const toggle = (key, on, set) => {
+        writeSetting(key, !on);
+        set(!on);
     };
 
     const run = async kind => {
-        if (busy) return;
+        if (task.current) return;
+        const controller = new AbortController();
+        task.current = controller;
+        const { signal } = controller;
         setBusy(kind);
         try {
-            let messages = sharedMessages(chosen);
+            let messages = excerpt ? [{ name: author.name, user: author.user, html: excerpt.html, text: excerpt.text.trim() }].filter(m => m.text) : sharedMessages(chosen);
             if (!messages.length) throw new Error('这一段没有能分享的文字');
             let title = `${character.name} · ${chapterTitle}`;
             if (hide && names.length) {
-                messages = hideNames(messages, names);
+                const masked = hideNames(messages, names);
+                messages = masked.map((m, i) => ({ ...m, html: messages[i].html, hiddenNames: names }));
                 title = hideInText(title, names);
             }
             if (kind === 'copy') {
-                notify(await copyText(asText(title, messages)) ? `已复制 ${messages.length} 条` : '复制失败，试试「文本文件」', 'info');
+                const copied = await copyText(asText(title, messages));
+                checkActive(signal);
+                notify(copied ? `已复制 ${messages.length} 条` : '复制失败，试试「文本文件」', 'info');
             } else if (kind === 'text') {
                 const file = new File([asText(title, messages)], `${title.replace(/[\\/:*?"<>|]/g, '')}.txt`, { type: 'text/plain' });
-                const result = await hand([file]);
+                const result = await hand([file], signal);
+                checkActive(signal);
                 if (result !== 'cancelled') notify(result === 'shared' ? '已分享' : '已保存文本文件', 'info');
             } else {
-                await document.fonts?.ready;
-                const files = await asPictures(title, messages);
-                const result = await hand(files);
-                if (result !== 'cancelled') notify(`${result === 'shared' ? '已分享' : '已保存'} ${files.length > 1 ? `${files.length} 张图` : '长图'}`, 'info');
+                // A font site's font comes in pieces by character: fetch the ones this text needs, off-screen ones too.
+                const family = getComputedStyle(document.querySelector('.tl-message-body') ?? document.body).fontFamily;
+                const loaded = await waitForPictureFonts(family, asText(title, messages), themed, { signal });
+                checkActive(signal);
+                const files = await asPictures(title, messages, themed, { font: loaded ? family : 'system-ui, sans-serif', signal });
+                const result = await hand(files, signal);
+                checkActive(signal);
+                if (result !== 'cancelled') notify(`${result === 'shared' ? '已分享' : '已保存'} ${files.length > 1 ? `${files.length} 张图` : '长图'}${loaded ? '' : '（字体未加载完成，已使用系统字体）'}`, 'info');
             }
+            checkActive(signal);
             onClose();
         } catch (e) {
-            notify(e.message);
+            if (!signal.aborted) notify(e.message);
         } finally {
-            setBusy(false);
+            if (task.current === controller) task.current = null;
+            if (!signal.aborted) setBusy(false);
         }
     };
 
     if (!bridge) {
         return (
-            <Sheet title="分享" onClose={onClose}>
+            <Sheet title="分享" onClose={close}>
                 <EngineWait />
             </Sheet>
         );
     }
-    if (!rounds.length) {
+    if (!items.length) {
         return (
-            <Sheet title="分享" onClose={onClose}>
+            <Sheet title="分享" onClose={close}>
                 <p class="tl-muted tl-sheet-note">这个故事还没有能分享的内容</p>
             </Sheet>
         );
     }
     return (
-        <Sheet title="分享" onClose={onClose}>
-            <p class="tl-sheet-section">分享哪些（一轮 = 你说的一句加之后的回复）</p>
-            <div class="tl-choice-list" role="radiogroup" aria-label="分享范围">
-                {[...presets, { key: 'pick', label: '自己选范围' }].map(p => (
-                    <button key={p.key} class="tl-sheet-item tl-choice-row" data-pick role="radio" aria-checked={choice === p.key ? 'true' : 'false'}
-                        onClick={() => {
-                            if (p.key === 'pick') setPicked({ start, end });
-                            setChoice(p.key);
-                        }}>
-                        <span class="tl-sheet-item-label">{p.label}</span>
-                    </button>
-                ))}
-            </div>
-            {choice === 'pick' && (
-                <div class="tl-share-rounds">
-                    <label class="tl-field-group">从
-                        <select class="tl-input" aria-label="从第几轮开始" value={String(start)} onChange={e => pick('start', e.currentTarget.value)}>
-                            {rounds.map((r, i) => <option key={i} value={String(i)}>{roundLabel(r)}</option>)}
-                        </select>
-                    </label>
-                    <label class="tl-field-group">到
-                        <select class="tl-input" aria-label="到第几轮结束" value={String(end)} onChange={e => pick('end', e.currentTarget.value)}>
-                            {rounds.map((r, i) => <option key={i} value={String(i)} disabled={i < start}>{roundLabel(r)}</option>)}
-                        </select>
-                    </label>
+        <Sheet title="分享" onClose={close}>
+            {busy && <p class="tl-muted tl-sheet-note" role="status">正在准备，关闭面板会取消尚未完成的导出</p>}
+            <fieldset class="tl-share-fields" disabled={!!busy} aria-label="分享设置" style={{ border: 0, margin: 0, padding: 0, minWidth: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)' }}>
+            {excerpt ? <>
+                <p class="tl-sheet-section">分享选中的一段</p>
+                <p class="tl-muted tl-sheet-note">来自 #{author.index} {author.name}：{summarize(excerpt.text)}</p>
+            </> : <>
+                <p class="tl-sheet-section">分享哪些（一轮 = 你说的一句加之后的回复）</p>
+                <div class="tl-choice-list" role="radiogroup" aria-label="分享范围">
+                    {[...presets, { key: 'pick', label: '自己选楼层' }].map(p => (
+                        <button key={p.key} class="tl-sheet-item tl-choice-row" data-pick role="radio" aria-checked={choice === p.key ? 'true' : 'false'}
+                            onClick={() => {
+                                if (p.key === 'pick') setPicked({ start, end });
+                                setChoice(p.key);
+                            }}>
+                            <span class="tl-sheet-item-label">{p.label}</span>
+                        </button>
+                    ))}
                 </div>
-            )}
-            <p class="tl-muted tl-sheet-note" aria-live="polite">
-                {start === end ? roundName(rounds[start]) : `${roundName(rounds[start])}到${roundName(rounds[end])}`}，共 {count} 条
-            </p>
+                {choice === 'pick' && (
+                    <div class="tl-share-rounds">
+                        <label class="tl-field-group">从
+                            <select class="tl-input" aria-label="从哪一楼开始" value={String(start)} onChange={e => pick('start', e.currentTarget.value)}>
+                                {items.map((m, i) => <option key={m.index} value={String(i)}>{floorLabel(m)}</option>)}
+                            </select>
+                        </label>
+                        <label class="tl-field-group">到
+                            <select class="tl-input" aria-label="到哪一楼结束" value={String(end)} onChange={e => pick('end', e.currentTarget.value)}>
+                                {items.map((m, i) => <option key={m.index} value={String(i)} disabled={i < start}>{floorLabel(m)}</option>)}
+                            </select>
+                        </label>
+                    </div>
+                )}
+                <p class="tl-sheet-section">谁的发言</p>
+                <Choices label="谁的发言" options={speakers} value={who} onChange={setWho} />
+                <p class="tl-muted tl-sheet-note" aria-live="polite">
+                    {nothing ? (who === 'all' ? '这一段没有能分享的文字，换个范围试试' : `这一段里没有${who === 'user' ? '你' : character.name}的发言，换个范围或选「都要」`)
+                        : chosen.length === 1 ? `#${chosen[0].index}，共 1 条` : `#${chosen[0].index} 到 #${chosen.at(-1).index}，共 ${chosen.length} 条`}
+                </p>
+            </>}
             {names.length > 0 && (
-                <button class="tl-sheet-item tl-switch-row" role="switch" aria-checked={hide ? 'true' : 'false'} onClick={toggleHide}>
+                <button class="tl-sheet-item tl-switch-row" role="switch" aria-checked={hide ? 'true' : 'false'} onClick={() => toggle(HIDE_NAME_KEY, hide, setHide)}>
                     <span class="tl-sheet-item-label">隐藏我的名字</span>
                     <span class="tl-sheet-item-hint">
                         {`分享的内容里，${names.map(n => `「${n}」`).join('')}都换成 ${NAME_MASK}，正文里提到的也换${hasShortNames(names) ? '（只有一个字的名字只换署名）' : ''}。故事本身不变`}
@@ -333,9 +452,14 @@ export function ExportSheet({ character, chapterTitle, startIndex, notify, onClo
                 </button>
             )}
             <p class="tl-sheet-section">分享成</p>
-            <SheetItem label={busy === 'image' ? '正在生成长图…' : '长图'} hint="用现在的阅读配色，适合发给朋友；太长会分成几张" disabled={!!busy} onClick={() => run('image')} />
-            <SheetItem label={busy === 'text' ? '正在准备…' : '文本文件'} hint="TXT，可以存档或在别处读" disabled={!!busy} onClick={() => run('text')} />
-            <SheetItem label="复制文字" disabled={!!busy} onClick={() => run('copy')} />
+            <button class="tl-sheet-item tl-switch-row" role="switch" aria-checked={themed ? 'true' : 'false'} onClick={() => toggle(THEMED_KEY, themed, setThemed)}>
+                <span class="tl-sheet-item-label">长图用主题配色</span>
+                <span class="tl-sheet-item-hint">对白、旁白、粗体和名字按现在阅读主题的颜色画；关着时和以前一样，正文一种颜色</span>
+            </button>
+            <SheetItem label={busy === 'image' ? '正在生成长图…' : '长图'} hint="底色跟着现在的阅读主题，适合发给朋友；太长会分成几张" disabled={!!busy || nothing} onClick={() => run('image')} />
+            <SheetItem label={busy === 'text' ? '正在准备…' : '文本文件'} hint="TXT，可以存档或在别处读" disabled={!!busy || nothing} onClick={() => run('text')} />
+            <SheetItem label="复制文字" disabled={!!busy || nothing} onClick={() => run('copy')} />
+            </fieldset>
         </Sheet>
     );
 }

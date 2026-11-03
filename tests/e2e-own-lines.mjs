@@ -82,7 +82,7 @@ const sendText = async text => {
     await page.getByRole('textbox', { name: '输入消息' }).fill(text);
     await page.getByRole('button', { name: '发送', exact: true }).click();
 };
-check('a story without lines is an ordinary story', (await chapter()).startsWith('普通故事'), await chapter());
+check('a story without lines is an ordinary story', (await chapter()).startsWith(file), await chapter());
 
 // A request for a 小剧场: first a word that the model still reads the whole story, then it goes on its own line.
 await sendText('写个小剧场：丧尸男友');

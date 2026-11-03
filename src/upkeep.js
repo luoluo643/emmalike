@@ -73,22 +73,47 @@ export async function checkUpdate() {
     if (!info.currentCommitHash) return { kind: 'manual' };
     const result = { kind: info.isUpToDate ? 'current' : 'available', commit: info.currentCommitHash.slice(0, 7), branch: info.currentBranchName,
         remoteUrl: info.remoteUrl, global: own.global, admin };
-    if (result.kind === 'available') result.remoteVersion = await remoteVersion(info.remoteUrl, info.currentBranchName);
+    if (result.kind === 'available') {
+        result.remoteVersion = await remoteVersion(info.remoteUrl, info.currentBranchName);
+        result.historyUrl = historyUrl(info.remoteUrl, info.currentBranchName);
+    }
     if (result.kind === 'available' && !admin) result.kind = 'forbidden';
     return result;
 }
 
-/** The version in the repository's manifest, when the repository is on GitHub and public; '' otherwise. */
-async function remoteVersion(remoteUrl, branch) {
-    const match = /github\.com[/:]([^/]+)\/([^/.]+?)(?:\.git)?\/?$/.exec(String(remoteUrl));
-    if (!match || !branch) return '';
+const GITHUB = /github\.com[/:]([^/]+)\/([^/.]+?)(?:\.git)?\/?$/;
+
+/** A file of the repository on its branch, when the repository is on GitHub and public; null otherwise. */
+async function remoteFile(remoteUrl, branch, file) {
+    const match = GITHUB.exec(String(remoteUrl));
+    if (!match || !branch) return null;
     try {
         const signal = AbortSignal.timeout?.(8000);
-        const response = await fetch(`https://raw.githubusercontent.com/${match[1]}/${match[2]}/${encodeURIComponent(branch)}/manifest.json`, { cache: 'no-store', signal });
-        return response.ok ? String((await response.json()).version ?? '') : '';
+        const response = await fetch(`https://raw.githubusercontent.com/${match[1]}/${match[2]}/${encodeURIComponent(branch)}/${file}`, { cache: 'no-store', signal });
+        return response.ok ? response : null;
     } catch {
-        return '';
+        return null;
     }
+}
+
+/** The version in the repository's manifest; '' when it cannot be read. */
+async function remoteVersion(remoteUrl, branch) {
+    const response = await remoteFile(remoteUrl, branch, 'manifest.json');
+    try { return response ? String((await response.json()).version ?? '') : ''; } catch { return ''; }
+}
+
+/** The repository's list of changes on GitHub, for when there are no release notes to show; '' when not on GitHub. */
+function historyUrl(remoteUrl, branch) {
+    const match = GITHUB.exec(String(remoteUrl));
+    return match && branch ? `https://github.com/${match[1]}/${match[2]}/commits/${encodeURIComponent(branch)}` : '';
+}
+
+/** What the newer version changed, from the repository's CHANGELOG.md; null when there are no notes to read. */
+export async function releaseNotes(state) {
+    const response = await remoteFile(state.remoteUrl, state.branch, 'CHANGELOG.md');
+    if (!response) return null;
+    const { changesSince } = await import('./changelog.js');
+    try { return changesSince(await response.text(), __APP_VERSION__, state.remoteVersion); } catch { return null; }
 }
 
 /** Pulls the newest tavern-lite on the server. The page has to be reloaded afterwards. */

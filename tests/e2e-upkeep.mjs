@@ -87,9 +87,20 @@ try {
         return route.fulfill({ json: { shortCommitHash: '89abcde', isUpToDate: false, remoteUrl: 'https://github.com/someone/tavern-lite' } });
     });
     await context.route('https://raw.githubusercontent.com/someone/tavern-lite/main/manifest.json', route => route.fulfill({ json: { version: '9.9.9' } }));
+    let notes = '## 9.9.10\n- 还没发布的\n\n## 9.9.9\n- 书架上的故事有编号了\n\n## 0.0.1\n- 很早以前的改动\n';
+    await context.route('https://raw.githubusercontent.com/someone/tavern-lite/main/CHANGELOG.md', route => notes ? route.fulfill({ body: notes }) : route.fulfill({ status: 404, body: '' }));
     await page.getByRole('button', { name: /^检查更新/ }).click();
     await updates.getByRole('button', { name: /^更新到新版本/ }).waitFor({ timeout: 30000 });
     check('update: shows the new version from the repository', (await updates.innerText()).includes('9.9.9'), await updates.innerText());
+    await updates.getByText('书架上的故事有编号了').waitFor({ timeout: 30000 }).catch(() => { });
+    const listed = await updates.innerText();
+    check('update: says what the new version changed, before updating', listed.includes('这次更新了什么') && listed.includes('书架上的故事有编号了')
+        && !listed.includes('很早以前的改动') && !listed.includes('还没发布的'), listed);
+    notes = '';
+    await updates.getByRole('button', { name: /^再检查一次/ }).click();
+    await updates.getByText(/没读到这次的更新说明/).waitFor({ timeout: 30000 }).catch(() => { });
+    check('update: without release notes, points to the changes on GitHub',
+        await updates.getByRole('link', { name: /在 GitHub 上看改动记录/ }).getAttribute('href').catch(() => '') === 'https://github.com/someone/tavern-lite/commits/main');
     check('update: asks about tavern-lite\'s own folder', calls.some(c => c.path === 'version' && c.body?.extensionName === 'emmalike'), JSON.stringify(calls));
     await updates.getByRole('button', { name: /^更新到新版本/ }).click();
     await updates.getByRole('button', { name: '重新载入', exact: true }).waitFor({ timeout: 30000 });

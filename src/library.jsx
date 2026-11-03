@@ -4,16 +4,16 @@ import * as engine from './engine.js';
 import { substituteNames } from './render.js';
 import { storyIdentityLabel } from './episodes.jsx';
 import { ChapterActions, useChapters } from './chapters.jsx';
-import { Avatar, ConfirmSheet, GroupCover, Sheet, SheetItem, chapterLabel, go, plainSnippet, relativeTime, useEngine, useLongPress, friendlyError } from './ui.jsx';
+import { Avatar, ConfirmSheet, GroupCover, Sheet, SheetItem, chapterLabel, chapterNumbers, go, plainSnippet, relativeTime, useEngine, useLongPress, friendlyError } from './ui.jsx';
 
 const FAVORITES = '★ 收藏';
 
 const ACCEPT = api.IMPORT_TYPES.map(t => `.${t}`).join(',');
 
-function ContinueCard({ entry, character, group, user, onOpenGroup, onMenu, primary }) {
+function ContinueCard({ entry, character, group, user, numbers, onOpenGroup, onMenu, primary }) {
     const open = () => group ? onOpenGroup(group) : go({ name: 'chat', avatar: character.avatar, file: api.chatId(entry.file_name) });
     const name = group ? group.name : character.name;
-    const story = group ? '群聊' : storyIdentityLabel(entry, character.name, undefined, user.handle);
+    const story = group ? '群聊' : storyIdentityLabel(entry, character.name, numbers, user.handle);
     const snippet = group ? '群聊 · 在原版界面打开' : plainSnippet(substituteNames(entry.mes, character.name, user.name)).slice(0, primary ? 140 : 80);
     const meta = [entry.chat_items ? `${entry.chat_items} 条` : '', relativeTime(entry.last_mes)].filter(Boolean).join(' · ');
     // Group chats are managed in the full app; a character's story gets the same menu as on its page.
@@ -34,6 +34,25 @@ function ContinueCard({ entry, character, group, user, onOpenGroup, onMenu, prim
             {!group && <button class="tl-message-menu tl-continue-menu" aria-label={`${story}的操作`} onClick={() => onMenu(entry)}>⋯</button>}
         </div>
     );
+}
+
+/**
+ * "第 N 个故事" counts a character's stories, which the recent list does not carry. Reading just the file names of the
+ * few characters under 继续阅读 is a folder listing on the server; until it answers, a story is called "故事".
+ */
+function useStoryNumbers(characters) {
+    const [numbers, setNumbers] = useState(() => new Map());
+    const key = characters.map(c => `${c.avatar}\t${c.name}`).join('\n');
+    useEffect(() => {
+        let alive = true;
+        for (const character of characters) {
+            api.getChapterNames(character.avatar)
+                .then(names => alive && setNumbers(old => new Map(old).set(character.avatar, chapterNumbers(names, character.name))))
+                .catch(() => { /* the story keeps the plain name */ });
+        }
+        return () => { alive = false; };
+    }, [key]);
+    return numbers;
 }
 
 /** Rename and delete for a story on the shelf, with its character's other stories for names and numbering. */
@@ -84,6 +103,7 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
     const [error, setError] = useState('');
     const [menu, setMenu] = useState(null);
     const [menuChapter, setMenuChapter] = useState(null);
+    const [menuNumbers, setMenuNumbers] = useState(undefined);
     const [importing, setImporting] = useState(false);
     const [adding, setAdding] = useState(false);
     const [deleting, setDeleting] = useState(null);
@@ -106,10 +126,13 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
     }, []);
     useEffect(() => {
         setMenuChapter(null);
+        setMenuNumbers(undefined);
         if (!menu?.chat) return;
         let alive = true;
         api.getChapters(menu.avatar).then(list => {
-            if (alive) setMenuChapter(list.find(chapter => api.chatId(chapter.file_name) === api.chatId(menu.chat)) || null);
+            if (!alive) return;
+            setMenuChapter(list.find(chapter => api.chatId(chapter.file_name) === api.chatId(menu.chat)) || null);
+            setMenuNumbers(chapterNumbers(list, menu.name));
         }).catch(() => {});
         return () => { alive = false; };
     }, [menu]);
@@ -190,6 +213,7 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
             return true;
         })
         .slice(0, 4);
+    const storyNumbers = useStoryNumbers(continueList.filter(r => r.avatar).map(r => byAvatar.get(r.avatar)));
     const empty = characters !== null && characters.length === 0 && groups.length === 0;
 
     return (
@@ -228,7 +252,7 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
                 <section class="tl-section">
                     <div class="tl-continue-list">
                         {continueList.map((r, i) => (
-                            <ContinueCard entry={r} primary={i === 0} user={user} onOpenGroup={onOpenGroup} onMenu={setStoryMenu}
+                            <ContinueCard entry={r} primary={i === 0} user={user} numbers={storyNumbers.get(r.avatar)} onOpenGroup={onOpenGroup} onMenu={setStoryMenu}
                                 character={r.avatar ? byAvatar.get(r.avatar) : null}
                                 group={r.group ? byGroup.get(String(r.group)) : null} />
                         ))}
@@ -276,7 +300,7 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
             )}
             {menu && (
                 <Sheet title={menu.name} busy={starring} onClose={() => { if (!starring) setMenu(null); }}>
-                    {menuChapter && <p class="tl-muted tl-sheet-note">继续到：{storyIdentityLabel(menuChapter, menu.name, undefined, user.handle)}</p>}
+                    {menuChapter && <p class="tl-muted tl-sheet-note">继续到：{storyIdentityLabel(menuChapter, menu.name, menuNumbers, user.handle)}</p>}
                     <SheetItem label={menu.date_last_chat || recent.some(r => r.avatar === menu.avatar) ? '继续阅读' : '开始阅读'}
                         hint={menu.date_last_chat || recent.some(r => r.avatar === menu.avatar) ? '回到上次的故事' : '从开场白开始'} onClick={() => go({ name: 'chat', avatar: menu.avatar, file: api.chatId(menu.chat) })} />
                     <SheetItem label="开始新故事" hint="从头开始，不带之前的记忆" onClick={() => go({ name: 'chat', avatar: menu.avatar, file: '', fresh: true })} />

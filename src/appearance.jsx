@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import * as engine from './engine.js';
 import {
-    DEFAULT_READING, FONTS, FONT_SIZE, UI_FONT_SIZE, LINE_HEIGHTS, MARGINS, PARAGRAPHS, PRESETS, WIDTHS,
-    applyCss, applyReading, cachedCss, cachedDisplay, cachedReading, cachedThemes, findTheme, safeMode, saveAppearance, saveDisplay, themeVars,
+    DEFAULT_READING, FONT_SIZE, UI_FONT_SIZE, LINE_HEIGHTS, MARGINS, PARAGRAPHS, PRESETS, WIDTHS,
+    applyCss, applyReading, cachedCss, cachedDisplay, cachedReading, cachedThemes, findTheme, fontOptions, safeMode, saveAppearance, saveDisplay, themeVars,
 } from './theme.js';
+import { FontPicker } from './font-picker.jsx';
 import { Choices, Sheet, friendlyError } from './ui.jsx';
 
 /** A small page in the theme's colours and font, like the theme picker of a reading app. */
@@ -12,7 +13,7 @@ export function ThemeCard({ theme, selected, onClick, label }) {
     const style = theme.bg ? {
         background: vars['bg-image'] ? `linear-gradient(rgba(0,0,0,${vars['bg-dim'] ?? 0}), rgba(0,0,0,${vars['bg-dim'] ?? 0})), ${vars['bg-image']} center / cover, ${theme.bg}` : theme.bg,
         color: theme.text,
-        fontFamily: FONTS[theme.font]?.value ?? undefined,
+        fontFamily: fontOptions()[theme.font]?.value ?? undefined,
     } : undefined;
     return (
         <button class="tl-theme-card" role="radio" aria-checked={selected ? 'true' : 'false'} aria-label={label ?? theme.name} onClick={onClick}>
@@ -45,7 +46,13 @@ export function ReadingSheet({ onClose, onEditTheme, onPreviewThemes }) {
     const saveTimer = useRef(0);
     const themeStrip = useRef(null);
     const [more, setMore] = useState(false);
-    useEffect(() => { themeStrip.current?.querySelector('[aria-checked="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, []);
+    useEffect(() => {
+        const strip = themeStrip.current;
+        const selected = strip?.querySelector('[aria-checked="true"]');
+        if (!selected || strip.scrollWidth <= strip.clientWidth) return;
+        const item = selected.getBoundingClientRect(), box = strip.getBoundingClientRect();
+        strip.scrollLeft += item.left - box.left - (strip.clientWidth - item.width) / 2;
+    }, []);
 
     const update = patch => {
         const next = { ...latest.current, ...patch };
@@ -124,7 +131,7 @@ export function ReadingSheet({ onClose, onEditTheme, onPreviewThemes }) {
             <div id="tl-more-reading" hidden={!more}>
             <div class="tl-settings-group">
                 <span class="tl-settings-label">字体</span>
-                <Choices label="字体" options={FONTS} value={reading.font} onChange={font => update({ font })} />
+                <FontPicker label="字体" value={reading.font} onChange={font => update({ font })} />
             </div>
             <div class="tl-settings-group tl-settings-grid">
                 <span class="tl-settings-label">段距</span>

@@ -24,6 +24,7 @@ import { MAIN_LINE, idsFromMarks, lineView } from './line-view.js';
 import { ownIds, readRegistry } from './own-lines.js';
 import { TocSheet } from './toc.jsx';
 import { sameFloor } from './same-floor.js';
+import { selectedPassage } from './share-dom.js';
 
 const PAGE = 40;
 
@@ -133,11 +134,25 @@ function ExportLoader(props) {
 }
 
 /** The message as selectable text: a long press on a message opens its menu, so picking out a passage happens here. */
-function SelectTextSheet({ message, html, onClose }) {
+function SelectTextSheet({ message, html, onShare, onClose }) {
+    const body = useRef(null);
+    const [picked, setPicked] = useState(null);
+    useEffect(() => {
+        const update = () => {
+            const selected = getSelection();
+            const inside = selected && body.current?.contains(selected.anchorNode) && body.current.contains(selected.focusNode) && selected.toString().trim();
+            setPicked(inside ? { index: message.index, ...selectedPassage(selected) } : null);
+        };
+        document.addEventListener('selectionchange', update);
+        return () => document.removeEventListener('selectionchange', update);
+    }, []);
     return (
         <Sheet title="选择文字" onClose={onClose}>
-            <p class="tl-muted tl-sheet-note">按住文字拖动选择，再用系统菜单复制。</p>
-            <div class="tl-select-text tl-message-body" dangerouslySetInnerHTML={{ __html: html }} />
+            <p class="tl-muted tl-sheet-note">按住文字拖动选择，再用系统菜单复制{onShare ? '，或者分享选中的这段' : ''}。</p>
+            <div ref={body} class="tl-select-text tl-message-body" dangerouslySetInnerHTML={{ __html: html }} />
+            {onShare && <div class="tl-row tl-select-share">
+                <button class="tl-button" disabled={!picked} onPointerDown={e => e.preventDefault()} onClick={() => onShare(picked)}>分享选中的这段</button>
+            </div>}
         </Sheet>
     );
 }
@@ -666,7 +681,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
             const end = selected?.focusNode?.parentElement?.closest('.tl-message-body');
             const article = start?.closest('.tl-message[data-index]');
             setSelection(start && start === end && list.current?.contains(article) && selected.toString().trim()
-                ? { index: Number(article.dataset.index), text: selected.toString() } : null);
+                ? { index: Number(article.dataset.index), ...selectedPassage(selected) } : null);
         };
         document.addEventListener('selectionchange', update);
         return () => document.removeEventListener('selectionchange', update);
@@ -883,7 +898,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     const chapterName = character ? (route.fresh && !synced ? '新故事' : identity.title || chapterLabel(chatFile, character.name, numbers)) : '';
     // A story lines were opened from (inside it, or as stories of their own) is their 正文, not an "ordinary" story.
     const storyType = identity.kind === 'ordinary' && (lines.enabled || branches.children?.length > 0) ? '正文' : identity.type;
-    const lineLabel = `${storyType} · ${chapterName}`;
+    const lineLabel = identity.kind === 'ordinary' && storyType !== '正文' ? chapterName : `${storyType} · ${chapterName}`;
     // Where the page is: this story, and the line of it being read.
     const hereLabel = viewLabel ? `${lineLabel} › ${viewLabel}` : lineLabel;
     const forkMarks = useMemo(() => forksByIndex(branches.children), [branches]);
@@ -997,8 +1012,12 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                 )}
             </div>
             {reading.away && <button class="tl-button tl-jump-latest" onClick={reading.jump}>回到最新</button>}
-            {selection && !sheet && <button class="tl-button tl-selection-collect" onPointerDown={e => e.preventDefault()}
-                onClick={() => captureMessage(selection.index, 'quote', selection.text)}>收藏这句</button>}
+            {selection && !sheet && <div class="tl-selection-actions">
+                <button class="tl-button tl-selection-collect" onPointerDown={e => e.preventDefault()}
+                    onClick={() => captureMessage(selection.index, 'quote', selection.text)}>收藏这句</button>
+                {synced && <button class="tl-button" onPointerDown={e => e.preventDefault()}
+                    onClick={() => setSheet({ type: 'export', excerpt: selection })}>分享这段</button>}
+            </div>}
             {recent && <PersonalNotice record={recent} busy={undoBusy} onUndo={undoRecent} onClose={() => setRecent(null)}
                 onNote={() => setSheet({ type: 'personal', record: recent })} />}
             {synced && engine.getBridge()?.currentChat()?.avatar === route.avatar && engine.getBridge()?.currentChat()?.file === chatFile
@@ -1157,13 +1176,14 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                 </Sheet>
             )}
             {sheet?.type === 'export' && character && (
-                <ExportLoader character={character} chapterTitle={chapterName} startIndex={sheet.from} notify={notify} onClose={() => setSheet(null)} />
+                <ExportLoader character={character} chapterTitle={chapterName} startIndex={sheet.from} excerpt={sheet.excerpt} notify={notify} onClose={() => setSheet(null)} />
             )}
             {sheet?.type === 'persona' && (
                 <PersonaSheet characterName={character?.name} notify={notify} onOpenPanel={onOpenPanel} onClose={() => setSheet(null)} />
             )}
             {sheet?.type === 'select' && (
-                <SelectTextSheet message={sheet.message} html={sheet.message.html ?? previewHtml(sheet.message.mes, character?.name, user.name)} onClose={() => setSheet(null)} />
+                <SelectTextSheet message={sheet.message} html={sheet.message.html ?? previewHtml(sheet.message.mes, character?.name, user.name)}
+                    onShare={synced && sheet.message.index !== undefined ? excerpt => setSheet({ type: 'export', excerpt }) : null} onClose={() => setSheet(null)} />
             )}
             {sheet?.type === 'toc' && (
                 <TocSheet storyTitle={lineLabel} messages={sheet.story} currentIndex={sheet.current} onClose={() => setSheet(null)}

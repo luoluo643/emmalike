@@ -37,6 +37,7 @@
                 look = look && look.replace(/url\(["']?[^"')]*\/skins\/[^)]*\)/g, 'none');
             }
             add('tl-reading-css', look);
+            add('tl-font-css', mine('font-css', 'tavern-lite:font-css'));
             // New UI scale is independent of legacy cached reading CSS, including before the bundle loads.
             var display = owner && JSON.parse(localStorage.getItem('tavern-lite:display:v1:' + JSON.stringify(owner)));
             if (display && display.schemaVersion === 1 && Number.isFinite(Number(display.fontSize))) {

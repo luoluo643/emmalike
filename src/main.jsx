@@ -86,7 +86,7 @@ function App() {
     useEffect(() => {
         if (!user) return;
         const timer = setTimeout(() => import('./upkeep.js').then(m => m.dailyCheck()).then(found => {
-            if (found) notify(`轻酒馆有新版本${found.remoteVersion ? ` ${found.remoteVersion}` : ''}，可在「我的 → 检查更新」更新`, 'info');
+            if (found) notify(`轻酒馆有新版本${found.remoteVersion ? ` ${found.remoteVersion}` : ''}，可在「我的 → 检查更新」看这次改了什么再决定更新`, 'info');
         }).catch(() => { }), 20000);
         return () => clearTimeout(timer);
     }, [user?.handle]);
