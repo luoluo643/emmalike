@@ -30,6 +30,8 @@ async function keepAwake(on) {
 }
 
 export function reminderSupported() {
+    // TT 酒馆 is an app of its own: no page notifications there (they need a service worker).
+    if (engine.onTauriTavern) return false;
     return isSecureContext && 'Notification' in window && 'serviceWorker' in navigator;
 }
 
@@ -90,6 +92,7 @@ addEventListener('beforeinstallprompt', event => {
 addEventListener('appinstalled', () => { installOffer = null; });
 
 export function installState() {
+    if (engine.onTauriTavern) return 'none';
     if (matchMedia('(display-mode: standalone)').matches || navigator.standalone) return 'installed';
     if (installOffer) return 'offer';
     if (/iPhone|iPad|iPod/.test(navigator.userAgent)) return 'ios';

@@ -208,3 +208,28 @@ test('a short new line is saved whole, without asking the plugin', async () => {
     const f = await fixture({ copyPlugin: 'ok' }); await f.create();
     assert.equal(f.calls.some(c => c.path === '/api/plugins/tavern-lite-save/copy'), false);
 });
+
+// TT 酒馆 (src/tt-host.js): one fixed user and no /api/users/me; a chat file that does not exist is an error there.
+test('TT: the fixed account is never asked for, and a missing chat reads as missing, not as a failure', async () => {
+    const paths = [];
+    const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    const fetchImpl = async (path, init) => {
+        paths.push(path);
+        if (path === '/api/users/me') throw new Error('TT has no such request');
+        const body = JSON.parse(init.body);
+        if (body.file_name === 'present') return json([{ chat_metadata: {} }, { mes: 'hi', name: 'A', is_user: false }]);
+        if (body.file_name === 'broken') return json({ error: 'Failed to load chat', details: 'Permission denied' }, 500);
+        return json({ error: 'Failed to load chat', details: 'Not found: /data/chats/A/none.jsonl' }, 500);
+    };
+    const lease = { account: 'default-user' };
+    const helper = createEpisodeNative({ fixedAccount: 'default-user', fetchImpl, getRequestHeaders: async () => ({}), journal: { async readOperation() { return null; }, async transition() { throw new Error('not used'); } },
+        assertLease() {}, assertQueueOwner() {}, async assertSourceCurrent() {} });
+    const present = await helper.readFullChat({ account: 'default-user', avatar: 'a.png', file: 'present' }, lease);
+    assert.equal(present.kind, 'present');
+    const missing = await helper.readFullChat({ account: 'default-user', avatar: 'a.png', file: 'none' }, lease);
+    assert.equal(missing.kind, 'missing-or-unreadable');
+    await assert.rejects(helper.readFullChat({ account: 'default-user', avatar: 'a.png', file: 'broken' }, lease), { code: 'HTTP_UNCONFIRMED' });
+    assert.equal(paths.includes('/api/users/me'), false);
+    // Another account than TT's own is refused before anything is read.
+    await assert.rejects(helper.readFullChat({ account: 'alice', avatar: 'a.png', file: 'present' }, { account: 'alice' }), { code: 'ACCOUNT_CHANGED' });
+});

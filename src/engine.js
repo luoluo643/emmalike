@@ -9,7 +9,13 @@ export const NETWORK_FAILURE = '网络断了，没加载完';
 // Signed out (expired, or logged out elsewhere): the server answers the full app's page with its login page, which never
 // gets ready. Said at once instead of after the 4 minute limit.
 export const LOGIN_FAILURE = '登录过期了，请重新登录';
+import { clipToRects, clipWithHoles, ttHostWindow } from './tt-host.js';
+
 const BRIDGE_URL = new URL('../bridge.js', location.href).href;
+// On TT 酒馆 (src/tt-host.js) the full app is TT's own page, which the shell is laid over: nothing is loaded, the
+// bridge goes into that page, and showing the full app means making the shell see-through except its way back.
+const ttHost = ttHostWindow(globalThis);
+export const onTauriTavern = !!ttHost;
 // The official releases the browser tests pass on; another version still works but shows 未在此版本验证.
 export const TESTED_VERSIONS = ['1.16.0', '1.17.0', '1.18.0', '1.19.0'];
 // A git install reports its branch and commit after the number ("1.19.0 'release' (06bde93)"); only x.y.z is compared.
@@ -54,6 +60,7 @@ export const ENGINE_MODES = {
 const NEEDS = { auto: ['open', 'input', 'action'], input: ['input', 'action'], manual: ['action'] };
 
 export function engineMode() {
+    if (ttHost) return 'auto';
     try {
         const mode = localStorage.getItem(MODE_KEY);
         return ENGINE_MODES[mode] ? mode : 'auto';
@@ -233,6 +240,22 @@ export function engineInfo() {
 
 function nativeWindow() {
     return iframe?.contentWindow;
+}
+
+// TT's page in the place of the engine frame: the same reads (its window, document, still there) and the same marks
+// (classList: shown or not), without an element of its own to load, lay over or remove.
+function ttEngineFrame() {
+    const marks = document.createElement('span');
+    return {
+        tt: true,
+        get contentWindow() { return ttHost; },
+        get contentDocument() { try { return ttHost.document; } catch { return null; } },
+        get isConnected() { try { return !!ttHost.document?.documentElement?.isConnected; } catch { return false; } },
+        classList: marks.classList,
+        style: {},
+        dataset: {},
+        remove() { },
+    };
 }
 
 /** The full app's window, for frontend cards that call its helper API (see cards.js). */
@@ -478,11 +501,12 @@ async function connectBridge(run, connection) {
     }
     unsubscribe?.();
     unsubscribe = bridge.on((type, detail) => {
+        if (ttHost && ttShellHidden) return;
         if (run !== attempt || run.frame !== iframe || run.frame.contentDocument !== connection.binding.document) return;
         if (type === 'floats') setFloats(detail);
         emit(type, detail);
     });
-    bridge.setShellShowing?.(!isNativeVisible());
+    bridge.setShellShowing?.(!isNativeVisible() && !ttShellHidden);
     setFloats(bridge.floatingLayers?.() ?? []);
     if (!currentConnection(run, connection)) return;
     emit('timing', Date.now() - startedAt);
@@ -656,7 +680,8 @@ function noteNetworkTrouble() {
 }
 
 function tick() {
-    try { if (state === 'loading') shareSettingsRequests(nativeWindow()); } catch { /* the page is between documents */ }
+    // TT's page is already running and answers its requests itself: nothing to share or reroute.
+    try { if (state === 'loading' && !ttHost) shareSettingsRequests(nativeWindow()); } catch { /* the page is between documents */ }
     const dialogOpen = watchDialogs();
     if (state !== 'loading') return;
     if (dialogOpen) deadline = Date.now() + READY_TIMEOUT_MS;
@@ -675,7 +700,7 @@ function tick() {
         run.listening = binding;
         binding.emitter.on(binding.eventName, run.listener);
     }
-    if (state === 'loading' && onLoginPage()) {
+    if (state === 'loading' && !ttHost && onLoginPage()) {
         setState('failed', LOGIN_FAILURE);
         emit('account-changed');
         return;
@@ -698,6 +723,21 @@ export function startEngine() {
     clearInterval(pollTimer);
     clearInterval(earlyTimer);
     floats = [];
+    if (ttHost) {
+        iframe = ttEngineFrame();
+        startedAt = Date.now();
+        skipRestore = null;
+        networkTroubleAt = 0;
+        hiddenMs = 0;
+        hiddenSince = 0;
+        deadline = startedAt + READY_TIMEOUT_MS;
+        attempt = createAttempt(iframe);
+        setPhase('connect');
+        setState('loading');
+        pollTimer = setInterval(tick, 300);
+        tick();
+        return;
+    }
     iframe = document.createElement('iframe');
     iframe.className = 'engine';
     iframe.title = '酒馆原版界面';
@@ -732,6 +772,7 @@ export function restartEngine() {
 
 export function showNative(visibleNow) {
     iframe?.classList.toggle('visible', visibleNow);
+    if (ttHost) watchReturnHandle(visibleNow);
     // Frontend cards run in the shell while it is on screen; the full app gets its own copies back while shown.
     getBridge()?.setShellShowing?.(!visibleNow);
     applyOverlay();
@@ -750,6 +791,7 @@ function setFloats(rects) {
 }
 
 function applyOverlay() {
+    if (ttHost) { applyTtClip(); return; }
     if (!iframe) return;
     const on = floats.length > 0 && floatsAllowed && !iframe.classList.contains('visible') && state === 'ready';
     iframe.classList.toggle('overlay', on);
@@ -802,8 +844,85 @@ addEventListener('pagehide', () => {
 
 // Taps on the shell reach floating layers that react to taps on the page.
 addEventListener('pointerdown', event => {
-    if (iframe?.classList.contains('overlay')) getBridge()?.pointerAt?.(event.clientX, event.clientY);
+    if (!ttHost && iframe?.classList.contains('overlay')) getBridge()?.pointerAt?.(event.clientX, event.clientY);
 }, true);
+
+// ---- TT: the shell's frame over TT's page ----
+// While the full app is shown the shell shows only its way back (the return tab) and lets everything else through;
+// while the shell is shown, the full app's floating layers show and take touches through holes in it.
+let ttShellHidden = false;
+let returnWatch = null;
+
+function ttShellFrame() {
+    try { return window.frameElement; } catch { return null; }
+}
+
+function applyTtClip() {
+    const frame = ttShellFrame();
+    if (!frame) return;
+    const nativeShown = !!iframe?.classList.contains('visible');
+    const root = document.documentElement;
+    root.classList.toggle('tl-tt-native', nativeShown);
+    let clip = '';
+    if (nativeShown) {
+        const handle = document.querySelector('.tl-return');
+        // While the tab is dragged the whole shell takes the finger; it is see-through, so the page shows anyway.
+        if (!handle) clip = 'inset(50% 50% 50% 50%)';
+        else if (!handle.classList.contains('is-dragging')) clip = clipToRects([handle.getBoundingClientRect()], 6);
+    } else {
+        const on = floats.length > 0 && floatsAllowed && state === 'ready';
+        if (on) clip = clipWithHoles(floats, innerWidth, innerHeight, FLOAT_MARGIN);
+        const cover = on && floats.some(r => r.width * r.height >= innerWidth * innerHeight * 0.9);
+        if (cover !== floatCover) {
+            floatCover = cover;
+            emit('float-cover', cover);
+        }
+    }
+    frame.style.clipPath = clip;
+    // The frame is see-through only when both sides use the same colour scheme.
+    frame.style.colorScheme = nativeShown ? getComputedStyle(root).colorScheme || 'normal' : '';
+}
+
+function watchReturnHandle(on) {
+    returnWatch?.disconnect();
+    returnWatch = null;
+    if (on && typeof MutationObserver === 'function') {
+        let queued = false;
+        const update = () => {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(() => { queued = false; applyTtClip(); });
+        };
+        returnWatch = new MutationObserver(update);
+        returnWatch.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style'] });
+    }
+    applyTtClip();
+}
+
+if (ttHost) {
+    addEventListener('resize', () => applyTtClip());
+    // index.js hides the frame when the reader leaves the shell, and shows it from the menu.
+    addEventListener('tl-tt-hidden', () => {
+        ttShellHidden = true;
+        getBridge()?.setShellShowing?.(false);
+    });
+    addEventListener('tl-tt-shown', () => {
+        ttShellHidden = false;
+        getBridge()?.setShellShowing?.(!isNativeVisible());
+        applyTtClip();
+    });
+    // The bridge stays in TT's page when this page reloads: what it would tell this page goes nowhere after that.
+    addEventListener('pagehide', () => {
+        unsubscribe?.();
+        unsubscribe = undefined;
+        try { bridge?.setShellShowing?.(false); } catch { /* TT's page is gone too */ }
+    });
+}
+
+/** Leaves the shell for TT's page (index.js keeps it as it was; the menu opens it again). */
+export function hideTtShell() {
+    try { ttHost?.TavernLiteTt?.hide?.(); } catch { /* TT's page is between documents */ }
+}
 
 export function isNativeVisible() {
     return !!iframe?.classList.contains('visible');

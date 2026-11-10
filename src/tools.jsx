@@ -22,7 +22,7 @@ export function ToolsSheet({ ready, onOpenPanel, onOpenExtensionPanel, onGo, onO
     return (
         <Sheet title="设置与扩展" onClose={onClose}>
             {!ready && <EngineWait when="好了下面就能打开" />}
-            <p class="tl-muted tl-sheet-note">世界书、预设和正则在这里改；其余的会打开原版界面，改完点「返回轻酒馆」</p>
+            <p class="tl-muted tl-sheet-note">世界书、预设和正则在这里改；其余的会打开原版界面，改完点屏幕边上的「‹」回来</p>
             {NATIVE_TOOLS.map(tool => <>
                 {tool.route
                     ? <SheetItem label={tool.label} hint={tool.hint} onClick={() => onGo(tool.route)} />
@@ -39,7 +39,7 @@ function ExtensionPanelsSheet({ panels, onOpen, onClose }) {
     const drawers = panels.filter(p => p.kind === 'drawer'), settings = panels.filter(p => p.kind === 'settings');
     return (
         <Sheet title="扩展的面板" onClose={onClose}>
-            <p class="tl-muted tl-sheet-note">扩展自己的面板和设置，名字是扩展起的。点了会打开原版界面的这个位置，改完点「返回轻酒馆」</p>
+            <p class="tl-muted tl-sheet-note">扩展自己的面板和设置，名字是扩展起的。点了会打开原版界面的这个位置，改完点屏幕边上的「‹」回来</p>
             {drawers.length > 0 && <p class="tl-sheet-section">顶栏面板</p>}
             {drawers.map(p => <SheetItem key={p.key} label={p.label} hint="在原版界面打开" onClick={() => onOpen(p.key)} />)}
             {settings.length > 0 && <p class="tl-sheet-section">扩展设置</p>}

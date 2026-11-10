@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 
-const source = (await readFile(new URL('../src/engine.js', import.meta.url), 'utf8')).replace(/^export /gm, '');
+// engine.js runs here as a plain script: the helpers it imports from tt-host.js go in front of it the same way.
+const ttHostSource = (await readFile(new URL('../src/tt-host.js', import.meta.url), 'utf8')).replace(/^export /gm, '');
+const source = ttHostSource + (await readFile(new URL('../src/engine.js', import.meta.url), 'utf8'))
+    .replace(/^import \{[^}]*\} from '\.\/tt-host\.js';\n/m, '').replace(/^export /gm, '');
 const READY = 'app_ready';
 const SETTINGS_LOADED = 'extension_settings_loaded';
 const gate = () => { let release; const promise = new Promise(resolve => { release = resolve; }); return { promise, release }; };

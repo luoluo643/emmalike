@@ -1,3 +1,4 @@
+import { missingChatAnswer } from './src/tt-host.js';
 import { EPISODE_NAMESPACE, normalizeLocator, sameLocator, serializeChat, parseFullChat, fingerprintChat,
     canonicalJson, identityKey, creationIdFor, validateEpisodeMeta, sameOperationIdentity, findCreation, resolveSourceIdentity, episodeError } from './src/episode-model.js';
 import { diffLines, hashLines } from './src/chat-lines.js';
@@ -10,7 +11,7 @@ const COPY_FROM_CHARS = 256 * 1024;
  * No queue, native switching, model calls, parent writes, or cleanup is implemented here.
  * assertLease/assertQueueOwner must be synchronous; assertSourceCurrent may await private native checks.
  */
-export function createEpisodeNative({ fetchImpl, getRequestHeaders, assertLease, assertQueueOwner, assertSourceCurrent, journal, onAccountChanged, now = Date.now }) {
+export function createEpisodeNative({ fetchImpl, getRequestHeaders, assertLease, assertQueueOwner, assertSourceCurrent, journal, onAccountChanged, now = Date.now, fixedAccount = null }) {
     for (const [key, value] of Object.entries({ fetchImpl, getRequestHeaders, assertLease, assertQueueOwner, assertSourceCurrent })) {
         if (typeof value !== 'function') throw episodeError('INVALID_DEPENDENCY', `缺少番外适配依赖 ${key}`);
     }
@@ -43,14 +44,22 @@ export function createEpisodeNative({ fetchImpl, getRequestHeaders, assertLease,
     }
     async function accountCheck(account, lease) {
         guard(lease, account);
-        const user = await json('/api/users/me', undefined, lease, 'GET');
+        // A host with one user and no accounts (TT 酒馆) has no such request; its user never changes.
+        const user = fixedAccount ? { handle: fixedAccount } : await json('/api/users/me', undefined, lease, 'GET');
         // The page must stop as well, not only this step: the next operation may otherwise trust an earlier check.
         if (user?.handle !== account) { onAccountChanged?.(); throw episodeError('ACCOUNT_CHANGED', '发送时换了账号，还不知道结果'); }
         guard(lease, account);
     }
     async function readFileUnchecked(locator, lease) {
         const l = normalizeLocator(locator); guard(lease, l.account);
-        const data = await json('/api/chats/get', { avatar_url: l.avatar, file_name: l.file }, lease);
+        let data;
+        if (fixedAccount) {
+            // TT 酒馆 answers a chat file that does not exist with an error where SillyTavern answers {}.
+            const response = await raw('/api/chats/get', { avatar_url: l.avatar, file_name: l.file }, lease);
+            const text = await response.text(); guard(lease);
+            if (!response.ok && !missingChatAnswer(response.status, text)) throw episodeError(response.status === 401 || response.status === 403 ? 'ACCOUNT_UNCONFIRMED' : 'HTTP_UNCONFIRMED', '还不知道结果，先去看看那个故事', { path: '/api/chats/get', status: response.status });
+            data = response.ok ? JSON.parse(text) : {};
+        } else data = await json('/api/chats/get', { avatar_url: l.avatar, file_name: l.file }, lease);
         const result = parseFullChat(data, l);
         if (result.kind === 'present') result.file.fingerprint = await fingerprintChat(result.file);
         guard(lease, l.account); return result;

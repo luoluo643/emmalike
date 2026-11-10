@@ -13,6 +13,8 @@ function harness() {
     const context = { chat, onlineStatus: 'connected', characters: [{ avatar: 'a.png', name: 'A' }], characterId: 0, getCurrentChatId: () => file };
     const sandbox = { console, setTimeout, clearTimeout, Date, Promise, structuredClone,
         users: { currentUser: { handle: 'unit-account' } },
+        // From src/tt-host.js: a SillyTavern server's page, not TT 酒馆.
+        isTauriTavern: () => false, ttSillyTavernVersion: () => '', TT_ACCOUNT: 'default-user',
         episodeError: (code, message) => Object.assign(new Error(message), { code }),
         fetch: (url, init) => url === '/api/users/me' ? Promise.resolve({ ok: true, json: async () => ({ handle: account }) }) : writeFetch(url, init),
         Event: class {}, document, window, bridgeDocument: document,

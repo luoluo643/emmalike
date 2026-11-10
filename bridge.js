@@ -12,6 +12,7 @@ import * as secrets from '../../../../scripts/secrets.js';
 import * as worldInfo from '../../../../scripts/world-info.js';
 import * as users from '../../../../scripts/user.js';
 import { OWN_FOLDER } from './bridge-own-folder.js';
+import { isTauriTavern, ttSillyTavernVersion, TT_ACCOUNT } from './src/tt-host.js';
 import * as extensions from '../../../../scripts/extensions.js';
 import * as presetManager from '../../../../scripts/preset-manager.js';
 import * as regexEngine from '../../../../scripts/extensions/regex/engine.js';
@@ -101,7 +102,9 @@ async function waitIdle() {
 
 let queue = Promise.resolve();
 let queueOwner = null;
-const nativeAccount = users.currentUser?.handle;
+// TT 酒馆 has one local user and no /api/users/me (src/tt-host.js): its account is fixed and cannot change.
+const onTauriTavern = isTauriTavern(window);
+const nativeAccount = users.currentUser?.handle ?? (onTauriTavern ? TT_ACCOUNT : undefined);
 let sessionFrozen = false, sessionEpoch = 0;
 const sessionChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('tavern-lite-session') : null;
 function freezeSession() {
@@ -122,6 +125,7 @@ let accountCheckedAt = 0, accountCheckedEpoch = -1, accountCheck = null;
 // the session changed.
 const ACCOUNT_CHECK_TRIES = 3;
 async function currentHandle() {
+    if (onTauriTavern) return TT_ACCOUNT;
     for (let attempt = 1; ; attempt++) {
         try {
             const response = await fetch('/api/users/me', { credentials: 'same-origin', cache: 'no-store' });
@@ -2479,7 +2483,9 @@ function settle() {
 }
 
 function version() {
-    return String(st.displayVersion ?? '').replace(/^SillyTavern\s*/, '') || 'unknown';
+    // On TT the SillyTavern release its frontend follows: what the checks against SillyTavern's behaviour are about.
+    const shown = onTauriTavern ? ttSillyTavernVersion(st.CLIENT_VERSION) : st.displayVersion;
+    return String(shown ?? '').replace(/^SillyTavern\s*/, '') || 'unknown';
 }
 
 // Enhanced episode operations have a separate durable journal, but share the ordinary bridge queue above.
@@ -2513,6 +2519,11 @@ function recordWriters() {
     return (extensionRecords ?? []).filter(e => e.writes && !(disabledAtLoad.has(e.name) && disabledNow.has(e.name)))
         .map(({ name, label, unreadable }) => ({ name, label, unreadable: !!unreadable }));
 }
+// The native observer was installed in time: before the app started (a server's page), or on TT, as soon as it could
+// (see bridge-native-bootstrap.js late).
+function nativeSettleVerified(settle) {
+    return settle?.earlyVerified === true || (onTauriTavern && settle?.late === true && settle?.lateVerified === true);
+}
 function episodeStatus(targetFile) {
     let enabled = true;
     try { enabled = localStorage.getItem(episodeSettingKey) !== 'false'; } catch { /* The journal reports storage failures before writes. */ }
@@ -2525,7 +2536,7 @@ function episodeStatus(targetFile) {
     if (episodeNativeUnverified && nativePolicy.verified) reasons.push('刚才开着的自动功能关掉后，要刷新页面才算数');
     if (episodeIsolationFailed) reasons.push('之前写番外时正文被改动过：先分别看看两个故事，再把「分开写番外与平行线」关掉重新打开');
     const settle = window.TavernLiteNativeSettle;
-    if (settle?.document !== bridgeDocument || settle?.manager !== openai.promptManager || settle?.earlyVerified !== true || !settle?.observer?.snapshot?.().supported) reasons.push('轻酒馆没在打开故事前准备好，请刷新页面再试');
+    if (settle?.document !== bridgeDocument || settle?.manager !== openai.promptManager || !nativeSettleVerified(settle) || !settle?.observer?.snapshot?.().supported) reasons.push('轻酒馆没在打开故事前准备好，请刷新页面再试');
     // Extensions that write chats do not block: every separate write is followed by a check that the story it came
     // from is unchanged (bridge-episode-flow parentUnchanged), and a change is reported.
     const writers = recordWriters(), warnings = [];
@@ -2572,7 +2583,7 @@ function episodeCurrentFull(template) {
 }
 async function episodeWaitStable() {
     const lease = episodeLease(), settle = window.TavernLiteNativeSettle;
-    if (settle?.document !== bridgeDocument || settle?.manager !== openai.promptManager || settle?.earlyVerified !== true || typeof settle?.observer?.wait !== 'function') throw episodeError('NATIVE_BARRIER_UNVERIFIED', '还没准备好，暂时不能自动切换番外');
+    if (settle?.document !== bridgeDocument || settle?.manager !== openai.promptManager || !nativeSettleVerified(settle) || typeof settle?.observer?.wait !== 'function') throw episodeError('NATIVE_BARRIER_UNVERIFIED', '还没准备好，暂时不能自动切换番外');
     await settle.observer.wait({ assertCurrent: () => { assertEpisodeQueue(lease); assertEpisodeLease(lease); } });
 }
 async function assertEpisodeSourceCurrent(operation, lease) {
@@ -2600,7 +2611,7 @@ async function assertEpisodeSourceCurrent(operation, lease) {
 // Requests whose answer the bridge checks itself go out exactly as made: the shell otherwise sends chat saves as only
 // what changed and keeps them on the device when the network drops (src/chat-sync.js).
 const exactRequest = init => ({ ...init, headers: { ...init?.headers, 'X-Tavern-Lite-Exact': '1' } });
-const episodeNative = createEpisodeNative({ fetchImpl: (path, init) => fetch(path, exactRequest(init)), getRequestHeaders: () => st.getRequestHeaders(),
+const episodeNative = createEpisodeNative({ fixedAccount: onTauriTavern ? TT_ACCOUNT : null, fetchImpl: (path, init) => fetch(path, exactRequest(init)), getRequestHeaders: () => st.getRequestHeaders(),
     assertLease: assertEpisodeLease, assertQueueOwner: assertEpisodeQueue, assertSourceCurrent: assertEpisodeSourceCurrent, journal: episodeJournal,
     onAccountChanged: freezeSession });
 const episodeFlow = createEpisodeFlow({
@@ -2646,7 +2657,7 @@ const episodeFlow = createEpisodeFlow({
 const worldEditor = createNativeWorldEditor({
     account: nativeAccount, worldInfo, st, powerUser, ctx, uuid: () => utils.uuidv4(),
     enqueue, makeLease: episodeLease, assertLease: assertEpisodeLease, assertQueueOwner: assertEpisodeQueue,
-    verifyAccount, waitIdle,
+    verifyAccount, waitIdle, onTauriTavern,
 });
 const presetEditor = createNativePresetEditor({
     account: nativeAccount, st, openai, presetManager, ctx, enqueue, verifyAccount, assertSession: assertBridgeSession,
@@ -2733,7 +2744,7 @@ window.TavernLiteBridge = Object.freeze({
     storyVariables: () => { const v = ctx().chatMetadata?.variables; return v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).length : 0; },
     personalConversation: () => ({ scope: currentChat(), messages: (ctx().chat ?? []).map(m => ({ name: m.name, is_user: !!m.is_user,
         is_system: !!m.is_system, mes: String(m.mes ?? ''), swipe_id: m.swipe_id ?? 0,
-        swipes: Array.isArray(m.swipes) ? m.swipes.map(String) : [] })) }),
+        swipes: Array.isArray(m.swipes) ? m.swipes.map(v => (v == null ? '' : String(v))) : [] })) }),
     revealPersonalSource,
     isReplying: () => nativeGenerating,
     personaList,

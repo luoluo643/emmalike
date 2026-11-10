@@ -54,3 +54,32 @@ test('non-engine native page retains menu-only behavior and receives no observer
     const f = fixture(), original = f.openai.promptManager.tryGenerate; f.window.frameElement = null;
     assert.equal(install(f), null); assert.equal(f.window.TavernLiteNativeSettle, undefined); assert.equal(f.openai.promptManager.tryGenerate, original);
 });
+// TT 酒馆 (src/tt-host.js) activates extensions after its app is ready: its page installs late, as itself.
+function ttFixture() {
+    const f = fixture();
+    f.window.frameElement = null;
+    f.window.__TAURITAVERN__ = { abiVersion: 2 };
+    // TT names itself in displayVersion; the SillyTavern release it follows is in the client version.
+    f.st.displayVersion = "TauriTavern 2.4.0 'main' (fixture)"; f.st.CLIENT_VERSION = 'SillyTavern:1.19.0:TauriTavern';
+    f.events.emit('APP_INITIALIZED'); f.events.emit('APP_READY');
+    f.context.getCurrentChatId = () => 'open-story'; f.context.chat.push({ mes: 'x' }); f.st.characters.push({});
+    return f;
+}
+test('TT page installs late: lateVerified, never earlyVerified, and settles only after the longer quiet time', async () => {
+    const f = ttFixture(), original = f.openai.promptManager.tryGenerate;
+    const state = install({ ...f, late: true });
+    assert.equal(state.earlyVerified, false); assert.equal(state.lateVerified, true); assert.equal(state.late, true);
+    assert.equal(state.errorCode, null); assert.notEqual(f.openai.promptManager.tryGenerate, original);
+    assert.equal(f.events.listenerCount('APP_INITIALIZED'), 0); assert.equal(f.events.listenerCount('APP_READY'), 0);
+    // The observer counts its own installation as activity: a wait right away cannot pass before the late quiet time.
+    await assert.rejects(state.observer.wait({ timeoutMs: 1500 }), { code: 'NATIVE_SETTLE_TIMEOUT' });
+    f.window.dispatchEvent(new Event('pagehide')); assert.equal(f.openai.promptManager.tryGenerate, original);
+});
+test('late installation is only for TT: a server page or an engine frame never takes it', () => {
+    const server = ttFixture(); delete server.window.__TAURITAVERN__;
+    assert.equal(install({ ...server, late: true }), null); assert.equal(server.window.TavernLiteNativeSettle, undefined);
+    const framed = ttFixture(); framed.window.frameElement = { dataset: { tavernLite: 'engine' } };
+    assert.equal(install({ ...framed, late: true }), null);
+    // Without `late` a TT page is still not an engine frame.
+    assert.equal(install(ttFixture()), null);
+});

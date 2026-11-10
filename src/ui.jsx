@@ -139,6 +139,24 @@ export function goBack(fallback) {
     else go(fallback, true);
 }
 
+/**
+ * The phone's back button where the browser does not deliver it to the page (TT 酒馆 asks the shell through index.js):
+ * the topmost sheet or view first, then the page before, then the shelf. False on the shelf with nothing open, when
+ * the back leaves the shell.
+ */
+export function shellBack() {
+    const state = history.state ?? {};
+    if (layers.length || state.tlLayer || state.tavernLite) {
+        history.back();
+        return true;
+    }
+    if (parseHash().name !== 'library') {
+        go({ name: 'library' }, true);
+        return true;
+    }
+    return false;
+}
+
 export function storage(action, fallback = null) {
     try { return action(localStorage); } catch { return fallback; }
 }

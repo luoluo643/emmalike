@@ -71,3 +71,11 @@ node tests/e2e-ui-regex-drafts.mjs 使用真实 Preact 编辑器和合成桥接�
 PROJECT=tlregexdraft ST_PORT=8103 MOCK_PORT=5073 ST_IMAGE=ghcr.io/sillytavern/sillytavern:1.16.0 bash tests/run-isolated.sh e2e-regex-sim e2e-regex 对真实隔离酒馆验证预设切换、390×844 触摸视口、800ms 延迟、40KiB/s 下行、20KiB/s 上行及断网重试。模拟专项仅允许 127.0.0.1:8103。另在 1.19.0 上串行重复；运行前构建、检查端口，结束后同样的 PROJECT/ST_PORT/MOCK_PORT 运行 down。
 
 隔离运行器准备失败立即停止；任一套件失败，运行器最终退出码为 1，即使后续套件通过也不会覆盖失败。npm run test:unit 包含不启动 Docker 的退出码回归测试。包装脚本仍需保留运行器退出码，不能只看 RUN-DONE。
+
+## TT 酒馆（TauriTavern）冒烟测试
+
+`tests/tt-smoke.mjs` 在安卓设备或模拟器上的 TT 酒馆里跑，查浏览器测试覆盖不到的部分：TT 只给自己页面和直接挂在上面的框架转请求、扩展在原版就绪后才加载、返回键由 TT 交给页面。单测里的 `tests/tt-host.test.mjs`、`native-bootstrap`（晚到路径）、`episode-native`、`world-editor-native-binding` 各有 TT 用例。
+
+1. 把工作副本（`index.js`、`manifest.json`、`style.css`、`bridge*.js`、`src/`、`app/`）放进 TT 数据目录的 `default-user/extensions/<文件夹>`，在 TT 里重载。
+2. `adb forward tcp:9258 localabstract:$(adb shell cat /proc/net/unix | grep -o 'webview_devtools_remote_[0-9]*' | head -1)`
+3. `node tests/tt-smoke.mjs http://127.0.0.1:9258`；加 `--generate` 时还会发送、生成新回复和删除，需要 TT 连着模型：本机跑 `node tests/mock-llm.mjs`，TT 的自定义地址填 `http://10.0.2.2:5001/v1`（模拟器访问电脑用这个地址，`adb reverse` 的 127.0.0.1 TT 连不上），TT 第一次会弹框问要不要信任这个地址。

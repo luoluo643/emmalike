@@ -1,4 +1,8 @@
 import { rememberShellRead, withKeptChat } from './chat-sync.js';
+import { missingChatAnswer, ttHostWindow, ttUser, ttVersionOf, unsupportedEndpoint } from './tt-host.js';
+
+/** Whether the shell is laid over TT 酒馆's page (src/tt-host.js): one local user, no accounts, no login. */
+export const onTauriTavern = !!ttHostWindow(typeof window === 'undefined' ? undefined : window);
 
 export class AuthRequired extends Error {
     constructor() {
@@ -45,7 +49,10 @@ async function send(path, { method = 'POST', body } = {}) {
     if (response.status === 401 || response.status === 403) throw authLost();
     if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(text || `操作没成功，再试一次（${response.status}）`);
+        // TT names a request it does not have in English; said plainly, the original kept on the error.
+        const missing = onTauriTavern ? unsupportedEndpoint(text) : null;
+        const message = missing ? 'TT 酒馆不支持这个功能，可以在原版界面里试试' : text || `操作没成功，再试一次（${response.status}）`;
+        throw Object.assign(new Error(message), { status: response.status, body: text, ...(missing ? { unsupported: missing } : {}) });
     }
     return response;
 }
@@ -55,6 +62,7 @@ async function request(path, options) {
 }
 
 export async function getCurrentUser() {
+    if (onTauriTavern) return ttUser();
     try {
         return await request('/api/users/me', { method: 'GET' });
     } catch (error) {
@@ -64,6 +72,7 @@ export async function getCurrentUser() {
 }
 
 export async function listUsers() {
+    if (onTauriTavern) return [];
     try {
         const users = await request('/api/users/list');
         return Array.isArray(users) ? users : [];
@@ -127,6 +136,7 @@ export async function getCharacter(avatar) {
 }
 
 export async function logout() {
+    if (onTauriTavern) return;
     await request('/api/users/logout').catch(() => { });
     announceSession();
 }
@@ -177,15 +187,32 @@ export async function getServerVersion() {
     }
 }
 
+/** TT 酒馆's own version ('' elsewhere or when it cannot be read). */
+export async function getTtVersion() {
+    if (!onTauriTavern) return '';
+    try {
+        return ttVersionOf(await request('/version', { method: 'GET' }));
+    } catch {
+        return '';
+    }
+}
+
 export function chatId(fileName) {
     return String(fileName ?? '').replace(/\.jsonl$/, '');
 }
 
 export async function getChat(character, fileName) {
     // A save of this story the network dropped shows here as it will in the full app (chat-sync.js).
-    const read = await request('/api/chats/get', {
-        body: { ch_name: character.name, file_name: chatId(fileName), avatar_url: character.avatar },
-    });
+    let read;
+    try {
+        read = await request('/api/chats/get', {
+            body: { ch_name: character.name, file_name: chatId(fileName), avatar_url: character.avatar },
+        });
+    } catch (error) {
+        // A story that was never saved: SillyTavern answers {} (no messages yet), TT an error.
+        if (!onTauriTavern || !missingChatAnswer(error.status, error.body)) throw error;
+        read = {};
+    }
     // The full app opens this story next; it is answered from this read instead of downloading it again.
     rememberShellRead(character.avatar, chatId(fileName), read);
     const data = await withKeptChat(character.avatar, chatId(fileName), read);

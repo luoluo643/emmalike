@@ -112,6 +112,21 @@ export function createPresetEditorAdapter(d) {
                 : { kind: 'unconfirmed', content: actual?.content, error: '应用时原版又改了，草稿还在，看一下' };
         });
     }
+    // Like a switch: used at once, kept in the preset when it is saved. Only the label changes; the entry keeps its identifier.
+    function presetEditorRenamePrompt(input) {
+        identity(input); const captured = clonePreset(input), lease = d.makeLease();
+        return d.enqueue(async () => {
+            d.assertLease(lease);
+            const find = () => identity(captured).prompts.find(item => item.identifier === captured.identifier);
+            const prompt = find(), value = String(captured.value ?? '').trim();
+            if (!prompt?.canEdit) fail('PRESET_PROMPT_MISSING', '这个条目不在了或不能改名');
+            if (!value) fail('PRESET_FIELD_INVALID', '名字不能是空的');
+            if ((prompt.name ?? '') !== (captured.base ?? '') && prompt.name !== value) fail('PRESET_FIELD_CONFLICT', '这个名字在别处改过了，看一下现在的再改', { key: 'name', mine: value, server: prompt.name });
+            if (prompt.name !== value) await guarded(lease, () => d.renamePrompt(captured.identifier, value));
+            if (find()?.name !== value) fail('PRESET_FIELD_UNCONFIRMED', '原版还没用上这个名字，看一下现在的设置');
+            return state(lease, { fresh: false });
+        });
+    }
     function presetEditorSetField(input) {
         identity(input); const captured = clonePreset(input), lease = d.makeLease();
         return d.enqueue(async () => {
@@ -308,5 +323,5 @@ export function createPresetEditorAdapter(d) {
             return state();
         });
     }
-    return { presetEditorState, presetEditorApplyPrompt, presetEditorSetField, presetEditorArrangePrompt, presetEditorSave, presetEditorRecover, presetEditorUseCopy, presetEditorSelect, presetEditorPrepareDecision, presetEditorDecide };
+    return { presetEditorState, presetEditorApplyPrompt, presetEditorRenamePrompt, presetEditorSetField, presetEditorArrangePrompt, presetEditorSave, presetEditorRecover, presetEditorUseCopy, presetEditorSelect, presetEditorPrepareDecision, presetEditorDecide };
 }

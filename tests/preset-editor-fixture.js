@@ -42,6 +42,7 @@ export function createPresetFixture({ storage = memoryStorage(), persist = false
         movePrompt: async (id, to) => { const order = runtime.prompt_order[0].order; order.splice(to, 0, order.splice(order.findIndex(x => x.identifier === id), 1)[0]); notify(); },
         copyPrompt: async (id, created, copyName) => { const order = runtime.prompt_order[0].order, source = runtime.prompts.find(p => p.identifier === id);
             runtime.prompts.push({ ...clonePreset(source), identifier: created, name: copyName || `${source.name} 副本` }); order.splice(order.findIndex(x => x.identifier === id) + 1, 0, { identifier: created, enabled: false }); notify(); },
+        renamePrompt: async (id, value) => { runtime.prompts.find(p => p.identifier === id).name = value; notify(); },
         applyPrompt: async (id, text) => { applies++; await wait('apply'); runtime.prompts.find(p => p.identifier === id).content = text; notify(); },
     });
     bridge.onPresetEditorChange = fn => { listeners.add(fn); return () => listeners.delete(fn); };

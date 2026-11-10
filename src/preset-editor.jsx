@@ -6,7 +6,11 @@ import './preset-editor.css';
 
 const BUILT_IN = { main: '主提示词', nsfw: '辅助提示词', jailbreak: '后置指令', enhanceDefinitions: '增强定义', chatHistory: '聊天记录', worldInfoBefore: '世界书（角色设定前）', worldInfoAfter: '世界书（角色设定后）', dialogueExamples: '对话示例', charDescription: '角色设定', charPersonality: '角色性格', scenario: '场景', personaDescription: '我的身份介绍' };
 const ROLE = { system: '系统', user: '用户', assistant: 'AI' };
-const promptName = p => BUILT_IN[p.identifier] && /^[\x20-\x7e]*$/.test(p.name || '') ? BUILT_IN[p.identifier] : p.name || p.identifier;
+// Position markers cannot be renamed here, so any English name on one is its stock label. The entries with text can,
+// so only their untouched default is translated: a name the user gave stays as written.
+const STOCK_NAME = { main: /^main( prompt)?$/i, nsfw: /^(auxiliary|nsfw) prompt$/i, jailbreak: /^(post-history instructions|jailbreak prompt)$/i, enhanceDefinitions: /^enhance definitions$/i };
+const isStockName = p => !p.name || (STOCK_NAME[p.identifier] ? STOCK_NAME[p.identifier].test(p.name) : /^[\x20-\x7e]*$/.test(p.name));
+const promptName = p => BUILT_IN[p.identifier] && isStockName(p) ? BUILT_IN[p.identifier] : p.name || p.identifier;
 const presetName = name => name === 'Default' ? '默认' : name;
 const drafts = new Map(), views = new Map();
 const draftStore = createPromptDraftStore();
@@ -50,19 +54,44 @@ function NumberSetting({ field, setting, busy, modified, onCommit }) {
     </div>;
 }
 
-function PromptEditor({ origin, prompt, active, bridge, onDone, reload, requestSwitch }) {
+/** Asks for an entry's new name. Used at once, like a switch; it stays in the preset once the preset is saved. */
+function RenameSheet({ origin, prompt, bridge, onClose, onRenamed }) {
+    const shown = promptName(prompt);
+    const [value, setValue] = useState(shown), [busy, setBusy] = useState(false), [error, setError] = useState('');
+    const composing = useRef(false), box = useRef(null), mounted = useRef(true), name = value.trim();
+    useEffect(() => { box.current?.focus(); box.current?.select(); return () => { mounted.current = false; }; }, []);
+    const submit = async () => {
+        if (busy || composing.current || !name) return;
+        if (name === shown) return onClose();
+        setBusy(true); setError('');
+        try {
+            const next = await bridge.presetEditorRenamePrompt({ account: origin.account, name: origin.name, identifier: prompt.identifier, base: prompt.name, value: name });
+            if (mounted.current) onRenamed(next, name);
+        } catch (e) { if (mounted.current) { setError(friendlyError(e.message)); setBusy(false); } }
+    };
+    return <Sheet title="改条目名字" busy={busy} onClose={onClose}>
+        <div class="tl-preset-copy-form"><p>只改列表里显示的名字，发给 AI 的内容不变</p>
+            <label>条目名字<input ref={box} class="tl-input" value={value} disabled={busy} onInput={e => setValue(e.currentTarget.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !composing.current) { e.preventDefault(); submit(); } }} /></label>
+            {error && <p class="tl-error" role="alert">{error}</p>}
+            <button class="tl-button tl-primary" disabled={busy || !name} aria-busy={busy ? 'true' : undefined} onClick={submit}>{busy ? <><Spinner />正在改名…</> : '确定'}</button></div>
+    </Sheet>;
+}
+
+function PromptEditor({ origin, prompt, active, bridge, onDone, reload, requestSwitch, onState }) {
     const scope = presetScope(origin.account, origin.name, prompt.identifier);
     const initialError = useRef(''), initialReadFailed = useRef(false);
     const [draft, writeDraft] = useState(() => { try { return drafts.get(scope) || draftStore.read({ ...origin, identifier: prompt.identifier }) || makePromptDraft(origin, prompt); }
         catch (error) { initialError.current = error.message; initialReadFailed.current = true; return makePromptDraft(origin, prompt); } });
     const [saving, setSaving] = useState(false), [status, setStatus] = useState('文字先留作草稿，点「应用」才生效');
-    const [leaving, setLeaving] = useState(false), [conflicts, setConflicts] = useState([]);
+    const [leaving, setLeaving] = useState(false), [conflicts, setConflicts] = useState([]), [renaming, setRenaming] = useState(false);
     const current = useRef(draft), lock = useRef(false), mounted = useRef(true), composing = useRef(false), textarea = useRef(null), page = useRef(null);
     const sameTarget = active?.account === origin.account && active?.name === origin.name, dirty = draft.text !== draft.base, modified = draft.text !== draft.opened;
     const setDraft = next => { current.current = typeof next === 'function' ? next(current.current) : next; drafts.set(scope, current.current); writeDraft(current.current);
         if (!initialReadFailed.current) { try { draftStore.write(current.current); initialError.current = ''; } catch (error) { initialError.current = error.message; } } };
     useEffect(() => () => { mounted.current = false; }, []);
-    const remote = sameTarget ? active.prompts.find(p => p.identifier === prompt.identifier)?.content : undefined;
+    const live = sameTarget && active.prompts.find(p => p.identifier === prompt.identifier) || null, shownPrompt = live || prompt;
+    const remote = sameTarget ? live?.content : undefined;
     useEffect(() => {
         if (!sameTarget) return;
         const updated = refreshPromptDraft(current.current, remote); setDraft(updated);
@@ -107,7 +136,9 @@ function PromptEditor({ origin, prompt, active, bridge, onDone, reload, requestS
         finally { lock.current = false; if (mounted.current) { setSaving(false); reload(); } }
     };
     return <main class="tl-page tl-preset-page tl-prompt-editor" ref={page}>
-        <PageHeader title={promptName(prompt)} onBack={back} />
+        <PageHeader title={promptName(shownPrompt)} onBack={back}>
+            <button class="tl-button" disabled={!live?.canEdit || saving} onClick={() => setRenaming(true)}>改名</button>
+        </PageHeader>
         <div class="tl-preset-editor-scroll">
             <p class="tl-preset-origin">正在编辑「{presetName(origin.name)}」的文字草稿。现在用的是「{presetName(active?.name) || '还没确认'}」。</p>
             {!sameTarget && <div class="tl-preset-warning" role="status">预设或账号已切换，原稿保留，不会应用到新预设。
@@ -130,6 +161,8 @@ function PromptEditor({ origin, prompt, active, bridge, onDone, reload, requestS
             <button class="tl-sheet-item" onClick={() => { setLeaving(false); onDone(); }}>保留草稿并返回</button>
             <button class="tl-sheet-item" onClick={() => { try { draftStore.remove(current.current); drafts.delete(scope); setLeaving(false); onDone(); }
                 catch (error) { setLeaving(false); setStatus(friendlyError(error.message)); } }}>放弃没应用的文字，返回</button></Sheet>}
+        {renaming && <RenameSheet origin={origin} prompt={shownPrompt} bridge={bridge} onClose={() => setRenaming(false)}
+            onRenamed={(next, name) => { onState(next); setRenaming(false); setStatus(`已改名为「${name}」，还没存进预设`); }} />}
     </main>;
 }
 
@@ -151,13 +184,13 @@ function PresetLoading() {
     useEffect(() => { const timer = setInterval(() => setSeconds(s => s + 1), 1000); return () => clearInterval(timer); }, []);
     return <section class="tl-preset-loading" role="status">
         <strong>正在加载预设条目…<span aria-hidden="true">{seconds >= 3 ? ` 已等 ${seconds} 秒` : ''}</span></strong>
-        <p>读完就能在这里开关、编辑、排序和复制每个条目。条目多的预设要十几秒</p>
+        <p>读完就能在这里开关、编辑、改名、排序和复制每个条目。条目多的预设要十几秒</p>
         <span class="tl-preset-loading-bar" aria-hidden="true" />
     </section>;
 }
 
 /** Every entry in the order sent to the model: up and down, copy, or pick one and put it next to another. */
-function ArrangeList({ prompts, picked, arranging, fresh, busy, onPick, onArrange }) {
+function ArrangeList({ prompts, picked, arranging, fresh, busy, onPick, onArrange, onRename }) {
     const from = prompts.findIndex(prompt => prompt.identifier === picked), moving = prompts[from];
     return <>
         <p class="tl-muted">{moving ? `把「${promptName(moving)}」移到哪里？点目标那一行的按钮。` : '按发给 AI 的先后排列。可以上下挪一格，或点「挪到…」再选位置；复制出的副本在原条目下面，先关着'}</p>
@@ -175,6 +208,7 @@ function ArrangeList({ prompts, picked, arranging, fresh, busy, onPick, onArrang
                         <button class="tl-chip" disabled={busy || index === prompts.length - 1} aria-label={`下移「${name}」`} onClick={() => onArrange('move', prompt, index + 1)}>↓</button>
                         <button class="tl-chip" disabled={busy || prompts.length < 2} aria-label={`挪动「${name}」`} onClick={() => onPick(prompt.identifier)}>挪到…</button>
                         {!prompt.marker && <button class="tl-chip" disabled={busy} aria-label={`复制「${name}」`} onClick={() => onArrange('copy', prompt)}>复制</button>}
+                        {prompt.canEdit && <button class="tl-chip" disabled={busy} aria-label={`改「${name}」的名字`} onClick={() => onRename(prompt)}>改名</button>}
                     </>}</div>
             </div>;
         })}</div>
@@ -186,7 +220,7 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
     const [state, setState] = useState(null), [loaded, setLoaded] = useState(false), [editing, setEditing] = useState(null), [busy, setBusy] = useState(false), [saving, setSaving] = useState(false);
     const [status, setStatus] = useState(''), [error, setError] = useState(''), [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
     const [applying, setApplying] = useState(null), [arrangeMode, setArrangeMode] = useState(false), [picked, setPicked] = useState(null), [arranging, setArranging] = useState(null), [fresh, setFresh] = useState('');
-    const [view, setView] = useState('common'), [sheet, setSheet] = useState(null), [copyName, setCopyName] = useState('');
+    const [view, setView] = useState('common'), [sheet, setSheet] = useState(null), [copyName, setCopyName] = useState(''), [renaming, setRenaming] = useState(null);
     const [conflicts, setConflicts] = useState([]), [pending, setPending] = useState(null), [showChanges, setShowChanges] = useState(false), [needsRead, setNeedsRead] = useState(false);
     const mounted = useRef(true), lock = useRef(false), serial = useRef(0), current = useRef(state), listPage = useRef(null), currentView = useRef(null);
     const latestRead = useRef(null), unverified = useRef(false);
@@ -368,10 +402,10 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
     }, [state, saving, busy]);
 
     return <>
-        {editing ? <PromptEditor key={presetScope(editing.origin.account, editing.origin.name, editing.prompt.identifier)} {...editing} active={state} bridge={bridge} onDone={done} reload={reload} requestSwitch={requestSwitch} />
+        {editing ? <PromptEditor key={presetScope(editing.origin.account, editing.origin.name, editing.prompt.identifier)} {...editing} active={state} bridge={bridge} onDone={done} reload={reload} requestSwitch={requestSwitch} onState={next => { current.current = next; setState(next); }} />
             : <main class="tl-page tl-preset-page tl-preset-list-page" ref={listPage} onScroll={remember}>
                 <PageHeader title="调整预设" onBack={() => leave(onBack)} />
-                {!bridge && <><p class="tl-muted">准备好后，就能在这里开关、编辑、排序和复制每个提示词条目</p><EngineStatus eng={eng} meanwhile="好了会自动显示" /></>}
+                {!bridge && <><p class="tl-muted">准备好后，就能在这里开关、编辑、改名、排序和复制每个提示词条目</p><EngineStatus eng={eng} meanwhile="好了会自动显示" /></>}
                 {bridge && !bridge.presetEditorState && <p class="tl-preset-warning">暂时没法在这里保存，刷新一下，或在原版界面里改</p>}
                 {bridge?.presetEditorState && loaded && !state && <p class="tl-preset-warning">这里只能改聊天补全的预设，现在的连接是别的类型，请在原版界面里改</p>}
                 {bridge?.presetEditorState && !loaded && !error && <PresetLoading />}
@@ -404,9 +438,9 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
                         <button class="tl-list-item tl-switch-row" role="switch" aria-label="流式输出" aria-checked={state.stream} aria-busy={applying?.key === 'stream_openai' ? 'true' : undefined} disabled={immediateBusy} onClick={() => change('stream_openai', !state.stream, state.stream)}><span class="tl-list-label">流式输出</span><span class="tl-list-hint">马上生效</span></button></section>
                     <section class="tl-section" id="tl-preset-prompts"><h2 class="tl-section-title">提示词条目 · {state.prompts.filter(p => p.enabled).length}/{state.prompts.length} 条打开</h2><p class="tl-muted">下面的条目按顺序拼成发给 AI 的内容；打开的才会用上</p>
                         <div class="tl-chips tl-preset-view" role="group" aria-label="提示词条目显示方式">{!arrangeMode && [['all', '全部'], ['on', '打开的'], ['off', '关闭的']].map(([id, label]) => <button class="tl-chip" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}
-                            <button class="tl-chip" aria-pressed={arrangeMode} onClick={() => { setArrangeMode(on => !on); setPicked(null); }}>{arrangeMode ? '排好了' : '排序和复制'}</button></div>
+                            <button class="tl-chip" aria-pressed={arrangeMode} onClick={() => { setArrangeMode(on => !on); setPicked(null); }}>{arrangeMode ? '排好了' : '排序、复制、改名'}</button></div>
                         {arrangeMode ? <ArrangeList prompts={state.prompts} picked={picked} arranging={arranging} fresh={fresh} busy={immediateBusy}
-                            onPick={setPicked} onArrange={arrange} /> : <><div class="tl-list">{shown.map(({ prompt, search }) => {
+                            onPick={setPicked} onArrange={arrange} onRename={setRenaming} /> : <><div class="tl-list">{shown.map(({ prompt, search }) => {
                             const stored = savedDraft(state.account, state.name, prompt.identifier);
                             return <div class="tl-preset-row" key={prompt.identifier} data-id={prompt.identifier} data-fresh={fresh === prompt.identifier || undefined} data-off={!shownOn(prompt) || undefined}><button class="tl-list-item tl-preset-open" disabled={!prompt.canEdit && !prompt.marker} onClick={() => prompt.canEdit ? openPrompt(prompt) : setStatus(`「${promptName(prompt)}」是位置标记，没有内容可改`)}>
                                 <span class="tl-list-label">{promptName(prompt)} <span class="tl-prompt-role">{prompt.marker ? '位置标记' : ROLE[prompt.role] || prompt.role}</span></span>
@@ -419,6 +453,8 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
                 {state && bridge?.regexEditorState && <PresetRegexLink bridge={bridge} leave={leave} />}
                 {bridge && (loaded || error || !bridge.presetEditorState) && <button class="tl-list-item" onClick={() => leave(() => onOpenPanel?.('ai-config'))}><span class="tl-list-label">在原版界面里打开</span><span class="tl-list-hint">导入导出、删除条目等更多操作</span></button>}
             </main>}
+        {renaming && state && <RenameSheet origin={state} prompt={renaming} bridge={bridge} onClose={() => setRenaming(null)}
+            onRenamed={(next, name) => { current.current = next; setState(next); setRenaming(null); setFresh(renaming.identifier); setStatus(`已改名为「${name}」，还没存进预设`); }} />}
         {sheet && <Sheet title={sheet.type === 'copy' ? '另存并使用' : sheet.type === 'decision' ? '继续存这个名字的风险' : sheet.type === 'leave' ? sheet.unverified ? '改动还没检查完' : '改动已经生效' : sheet.unverified ? '切换前改动还没检查完' : '确认切换预设'} busy={busy || saving} onClose={() => setSheet(null)}>
             {sheet.type === 'copy' ? <div class="tl-preset-copy-form"><p>把现在生效的设置另存一份并切过去，原预设不动；没应用的文字留在原预设</p>
                 <p class="tl-muted">原预设还不知道存没存上时，可以另存一个不同的新名字（只改大小写不算）</p>

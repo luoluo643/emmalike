@@ -119,6 +119,11 @@ export function createNativePresetEditor({ account, st, openai, presetManager, c
             order.splice(from + 1, 0, { identifier: created, enabled: false });
             pm.render?.(); await pm.saveServiceSettings(); publish();
         },
+        async renamePrompt(identifier, name) {
+            const pm = openai.promptManager, prompt = pm.getPromptById(identifier);
+            if (!prompt || !pm.isPromptEditAllowed(prompt) || prompt.marker) throw presetError('PRESET_PROMPT_MISSING', '这个条目不能在这里改名');
+            pm.updatePromptByIdentifier(identifier, { name }); pm.render?.(); await pm.saveServiceSettings(); publish();
+        },
         async applyPrompt(identifier, content) {
             const pm = openai.promptManager, prompt = pm.getPromptById(identifier);
             if (!prompt || !pm.isPromptEditAllowed(prompt) || prompt.marker) throw presetError('PRESET_PROMPT_MISSING', '这个提示词不能在这里改');

@@ -2,6 +2,8 @@
 // - while the preset is read, the page says what will be there (and does not offer only the full app);
 // - entries move up/down and to a picked place, and a single entry is copied (below it, off), all in the full app's own
 //   prompt order and kept after a reload;
+// - an entry is renamed from the arrange list or its own page, shows the new name (a built-in one too), and is kept
+//   when the preset is saved and after a reload;
 // - setting up a model service saves it as a new connection profile and keeps the one in use; a failed try puts the
 //   one in use back.
 // Usage: node e2e-preset-arrange.mjs <baseUrl> <handle> <password>
@@ -50,7 +52,7 @@ try {
     check('preset: the full app is not the only thing offered while reading', !loading.nativeWithIt, loading);
     check('preset: a jump to the entries near the top', await page.locator('.tl-preset-jump').count() === 1);
 
-    await page.getByRole('button', { name: '排序和复制', exact: true }).click();
+    await page.getByRole('button', { name: '排序、复制、改名', exact: true }).click();
     await page.locator('.tl-preset-arrange-row').first().waitFor();
     const before = await nativeOrder();
     const names = await arrangeNames();
@@ -81,11 +83,50 @@ try {
     check('copy: same text, an entry of the user\'s own', copyContent?.content === mainContent?.content && copyContent?.system_prompt === false && !!main);
     check('copy: the page says it still needs saving to the preset', (await page.locator('.tl-preset-savebar [role="status"]').innerText()).includes('还没存进预设'));
 
+    // --- Rename ---------------------------------------------------------------------------------------------------
+    const nameBox = page.getByRole('textbox', { name: '条目名字' });
+    await page.getByRole('button', { name: '改「主提示词 副本」的名字', exact: true }).click();
+    check('rename: the sheet starts with the name on screen', await nameBox.inputValue() === '主提示词 副本');
+    await nameBox.fill('   ');
+    check('rename: an empty name cannot be confirmed', await page.getByRole('button', { name: '确定', exact: true }).isDisabled());
+    await nameBox.fill('我的写作要求');
+    if (process.env.SHOTS) { await page.waitForTimeout(800); await page.screenshot({ path: `${process.env.SHOTS}/rename-sheet.png` }); }
+    await page.getByRole('button', { name: '确定', exact: true }).click();
+    await page.locator('.tl-preset-arrange-row', { hasText: '我的写作要求' }).waitFor({ timeout: 30000 });
+    let renamed = await nativeOrder();
+    check('rename from the arrange list: same place, same identifier, still off',
+        renamed.find(p => p.id === copy.id)?.name === '我的写作要求' && renamed.find(p => p.id === copy.id)?.enabled === false && JSON.stringify(renamed.map(p => p.id)) === JSON.stringify(after.map(p => p.id)), renamed);
+    check('rename: the page says it still needs saving to the preset', (await page.locator('.tl-preset-savebar [role="status"]').innerText()).includes('还没存进预设'));
+    if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/rename-arrange.png` });
+    check('rename: a position marker has no rename button', await page.locator('.tl-preset-arrange-row', { hasText: '位置标记' }).getByRole('button', { name: /的名字$/ }).count() === 0);
+    await page.getByRole('button', { name: '排好了', exact: true }).click();
+
+    await page.locator('.tl-preset-open').filter({ hasText: '主提示词' }).first().click();
+    await page.getByRole('button', { name: '改名', exact: true }).click();
+    const mainText = await page.locator('#tl-prompt-text').inputValue();
+    await nameBox.fill('My Main');
+    await nameBox.press('Enter');
+    await page.locator('.tl-page-title', { hasText: 'My Main' }).waitFor({ timeout: 30000 });
+    check('rename from the entry page: a built-in entry shows the English name it was given', (await nativeOrder()).find(p => p.id === 'main')?.name === 'My Main');
+    check('rename from the entry page: the text is untouched', await page.locator('#tl-prompt-text').inputValue() === mainText);
+    if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/rename-entry.png` });
+    await page.locator('.tl-back').click();
+    await page.locator('.tl-preset-open', { hasText: 'My Main' }).waitFor({ timeout: 30000 });
+    check('rename: the list shows the new name', await page.locator('.tl-preset-open', { hasText: '主提示词' }).count() === 0);
+
+    const savedName = await engineEval(async w => (await w.TavernLiteBridge.presetEditorState({ fresh: false })).name);
+    await page.getByRole('button', { name: '保存到此预设', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.tl-preset-savebar [role="status"]')?.textContent.includes('都已存进预设') || document.querySelector('.tl-preset-savebar [role="status"]')?.textContent.includes('已存进预设'), null, { timeout: 60000 });
+    const settings = await (await post('/api/settings/get', {})).json();
+    const stored = JSON.parse(settings.openai_settings[settings.openai_setting_names.indexOf(savedName)] || '{}').prompts || [];
+    check('rename: both names are in the saved preset file', stored.find(p => p.identifier === 'main')?.name === 'My Main' && stored.find(p => p.identifier === copy.id)?.name === '我的写作要求', { savedName, names: stored.map(p => p.name).slice(0, 6) });
+
     await page.waitForTimeout(2000);
     await page.reload();
     await page.locator('.tl-preset-row').first().waitFor({ timeout: 240000 });
     const reloaded = await nativeOrder();
     check('arrange and copy are kept after a reload', JSON.stringify(reloaded.map(p => p.id)) === JSON.stringify(after.map(p => p.id)));
+    check('rename: names are kept after a reload', reloaded.find(p => p.id === 'main')?.name === 'My Main' && reloaded.find(p => p.id === copy.id)?.name === '我的写作要求');
 
     // --- New connection -----------------------------------------------------------------------------------------------
     const profiles = () => engineEval(w => { const m = w.SillyTavern.getContext().extensionSettings.connectionManager; return { names: m.profiles.map(p => p.name), selected: m.profiles.find(p => p.id === m.selectedProfile)?.name ?? '', url: w.SillyTavern.getContext().chatCompletionSettings.custom_url }; });

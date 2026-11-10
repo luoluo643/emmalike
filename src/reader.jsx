@@ -263,12 +263,14 @@ function Message({ message, character, user, display, isLast, synced, generating
     const type = message.type ?? message.extra?.type;
     const role = message.is_user ? 'user' : message.is_system && type ? 'system' : 'char';
     const hidden = message.hidden ?? !!message.is_system;
-    const meta = [
-        display?.ids && `#${message.index}`,
+    // The floor number on its own, so a theme that already shows it elsewhere can drop it here.
+    const floor = display?.ids ? `#${message.index}` : '';
+    const rest = [
         display?.timestamps && message.meta?.time,
         display?.timer && role === 'char' && message.meta?.timer,
         display?.tokens && message.meta?.tokens && `${message.meta.tokens} tokens`,
     ].filter(Boolean).join(' · ');
+    const meta = floor || rest;
     const text = String(message.mes ?? '').trim();
     const blank = !text && !message.reasoning;
     // Until the first word arrives the full app holds the reply's place with "...".
@@ -304,10 +306,13 @@ function Message({ message, character, user, display, isLast, synced, generating
     return (
         <article class="tl-message" data-role={role} data-index={message.index} data-swipeable={swipeable ? 'true' : undefined}
             data-hidden={hidden ? 'true' : undefined} {...press} onPointerDown={onPointerDown} onPointerUp={onPointerUp}>
-            <div class="tl-message-name" data-meta={meta ? 'true' : undefined}>
+            <div class="tl-message-name" data-meta={meta ? 'true' : undefined} data-floor={message.index}>
                 <span>{message.name}</span>
                 {hidden && <span class="tl-tag tl-hidden-mark" title="这条消息不会发给 AI">AI 看不到</span>}
-                {meta && <span class="tl-message-meta">{meta}</span>}
+                {meta && <span class="tl-message-meta">
+                    {floor && <span class="tl-meta-floor">{floor}{rest ? ' · ' : ''}</span>}
+                    {rest && <span>{rest}</span>}
+                </span>}
                 <button class="tl-message-menu" aria-label="消息操作" onClick={() => onMenu(message)}>⋯</button>
             </div>
             {message.reasoning && <Reasoning reasoning={message.reasoning} open={display?.reasoningOpen} />}
@@ -368,6 +373,9 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     const [sendState, setSendState] = useState('pending');
     const [restored, setRestored] = useState(false);
     const [headerHidden, setHeaderHidden] = useState(false);
+    // 「正文 › 平行线」 follows the finger only: reading on hides it, pulling back shows it — also at the bottom, where
+    // the header stays.
+    const [pathHidden, setPathHidden] = useState(false);
     const [sheet, setSheet] = useState(null);
     const [inputButtons, setInputButtons] = useState([]);
     const [selection, setSelection] = useState(null), [recent, setRecent] = useState(null), [undoBusy, setUndoBusy] = useState(false);
@@ -381,6 +389,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     const stopReply = () => { if (Date.now() - generatingSince.current >= 700) run(b => b.stop()); };
     const nearBottom = useRef(true);
     const lastScrollTop = useRef(0);
+    const lastClientHeight = useRef(0);
     const sending = useRef(false);
     const keyFile = useRef(route.file);
     // Numbers for unnamed stories ("第 2 个故事"); read again when another story opens or a new one is saved.
@@ -752,10 +761,19 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
         lastScrollTop.current = element.scrollTop;
         if (delta > 8 && element.scrollTop > 60 && !nearBottom.current) setHeaderHidden(true);
         else if (delta < -8 || nearBottom.current) setHeaderHidden(false);
+        // When the list itself grows or shrinks (the header coming back, the composer growing) the browser moves the
+        // scroll position to fit; that is not the finger.
+        const resized = element.clientHeight !== lastClientHeight.current;
+        lastClientHeight.current = element.clientHeight;
+        if (element.scrollTop <= 60) setPathHidden(false);
+        else if (!resized && delta > 8) setPathHidden(true);
+        else if (!resized && delta < -8) setPathHidden(false);
     };
 
     const onReadingClick = event => {
-        if (!event.target.closest('button, a, input, textarea, .tl-swipe')) setHeaderHidden(h => !h);
+        if (event.target.closest('button, a, input, textarea, .tl-swipe')) return;
+        setHeaderHidden(!headerHidden);
+        setPathHidden(!headerHidden);
     };
 
     // `confirmed`: the author chose what the line the shell keeps sends to the model; `sends` ({ context, remember }):
@@ -944,7 +962,7 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                 <button class="tl-ghost" aria-label="更多" onClick={() => setSheet({ type: 'header' })}><Icon name="more" /></button>
             </header>
             {showPath && (
-                <nav class="tl-branch-path" aria-label="所在位置" data-hidden={headerHidden ? 'true' : undefined}>
+                <nav class="tl-branch-path" aria-label="所在位置" data-hidden={headerHidden || pathHidden ? 'true' : undefined}>
                     {branches.parent && <>
                         <button class="tl-link" onClick={() => openStory(branches.parent.file)}>正文</button>
                         <span aria-hidden="true">›</span>

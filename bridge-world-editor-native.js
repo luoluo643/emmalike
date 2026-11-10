@@ -27,6 +27,13 @@ export function createNativeWorldEditor(h) {
         account: h.account, journal, uuid: h.uuid,
         enqueue: h.enqueue, makeLease: h.makeLease, assertLease, verifyAccount: h.verifyAccount,
         async listBooks(lease) {
+            // TT 酒馆 has no /api/worldinfo/list; its own page reads the names from the settings answer (as SillyTavern did
+            // before that request existed).
+            if (h.onTauriTavern) {
+                const names = (await post('/api/settings/get', {}, lease))?.world_names;
+                if (!Array.isArray(names) || names.some(name => typeof name !== 'string')) throw worldError('WORLD_LIST_UNCONFIRMED', '世界书列表没加载全');
+                return [...names];
+            }
             const rows = await post('/api/worldinfo/list', {}, lease);
             if (!Array.isArray(rows) || rows.some(row => typeof row?.file_id !== 'string')) throw worldError('WORLD_LIST_UNCONFIRMED', '世界书列表没加载全');
             return rows.map(row => row.file_id);

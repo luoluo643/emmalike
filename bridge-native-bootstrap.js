@@ -1,4 +1,5 @@
-import { createNativeSettleBarrier } from './bridge-native-settle.js';
+import { createNativeSettleBarrier, ST119_RENDER_QUIET_MS } from './bridge-native-settle.js';
+import { isTauriTavern, ttSillyTavernVersion } from './src/tt-host.js';
 
 const installed = new WeakMap();
 const GLOBAL = 'TavernLiteNativeSettle';
@@ -6,10 +7,18 @@ const GLOBAL = 'TavernLiteNativeSettle';
 /** Called at extension-module top level, while native getSettings is awaiting
  * extension activation and BEFORE getCharacters/initRossMods/auto-load-chat.
  * Existing native modules must already be evaluated; no requests or settings edits.
+ *
+ * `late`: TT 酒馆 (src/tt-host.js) activates extensions only after its app is ready, so there is no early moment. The
+ * observer is then installed on TT's page as soon as the module runs and reports lateVerified instead of
+ * earlyVerified: background work already running when it was installed cannot be seen, so it only counts the page as
+ * settled after a longer quiet time (LATE_QUIET_MS) with nothing in flight that it saw start.
  */
+export const LATE_QUIET_MS = 3000;
 export function installNativeSettleBootstrap({ window: win, document: doc, st, openai, groups,
-    createBarrier = createNativeSettleBarrier } = {}) {
-    try { if (win?.frameElement?.dataset?.tavernLite !== 'engine') return null; } catch { return null; }
+    createBarrier = createNativeSettleBarrier, late = false } = {}) {
+    try {
+        if (late ? !isTauriTavern(win) || win.frameElement : win?.frameElement?.dataset?.tavernLite !== 'engine') return null;
+    } catch { return null; }
     if (installed.has(doc)) return installed.get(doc);
     let observer = null, earlyVerified = false, errorCode = null;
     const phase = { appInitializedAlready: false, appReadyAlready: false, hasChatId: false, messageCount: null, characterCount: null };
@@ -39,15 +48,16 @@ export function installNativeSettleBootstrap({ window: win, document: doc, st, o
         phase.hasChatId = ctx.getCurrentChatId() != null && ctx.getCurrentChatId() !== '';
         phase.messageCount = ctx.chat.length;
         phase.characterCount = st.characters.length;
-        if (phase.appInitializedAlready || phase.appReadyAlready || phase.hasChatId || phase.messageCount !== 0 ||
-            phase.characterCount !== 0 || st.this_chid !== undefined || groups.selected_group != null) {
+        if (!late && (phase.appInitializedAlready || phase.appReadyAlready || phase.hasChatId || phase.messageCount !== 0 ||
+            phase.characterCount !== 0 || st.this_chid !== undefined || groups.selected_group != null)) {
             throw Object.assign(new Error(), { code: 'NATIVE_BOOTSTRAP_LATE' });
         }
         // firstLoadInit awaits getClientVersion BEFORE getSettings activates us.
         // Unknown displayVersion here represents a real failed/unverified native
         // version read, not an expected initialization placeholder to poll past.
-        observer = createBarrier({ version: () => st.displayVersion, promptManager: manager,
+        observer = createBarrier({ version: () => late ? ttSillyTavernVersion(st.CLIENT_VERSION) : st.displayVersion, promptManager: manager,
             getPromptManager: () => openai.promptManager, eventSource: events, eventTypes: types, eventTarget: doc,
+            quietMs: late ? Math.max(LATE_QUIET_MS, ST119_RENDER_QUIET_MS) : ST119_RENDER_QUIET_MS,
             isNativeIdle: () => {
                 const swipe = win.SillyTavern.getContext().swipe?.state?.();
                 return !st.is_send_press && !st.isChatSaving && !groups.is_group_generating && (swipe === undefined || swipe === 'none');
@@ -58,7 +68,9 @@ export function installNativeSettleBootstrap({ window: win, document: doc, st, o
         errorCode = cause?.code || 'NATIVE_BOOTSTRAP_SETUP_FAILED';
         observer?.dispose?.(); observer = null;
     }
-    const state = Object.freeze({ schemaVersion: 1, document: doc, manager, earlyVerified, observer, errorCode,
+    const lateVerified = late && earlyVerified;
+    if (late) earlyVerified = false;
+    const state = Object.freeze({ schemaVersion: 1, document: doc, manager, earlyVerified, lateVerified, late, observer, errorCode,
         phase: Object.freeze(phase) });
     if (doc && typeof doc === 'object') installed.set(doc, state);
     try {

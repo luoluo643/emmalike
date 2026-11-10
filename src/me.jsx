@@ -7,6 +7,7 @@ import { PersonaSheet, personaThumb } from './persona.jsx';
 import { modelSummary } from './model.jsx';
 import { DisplaySheet } from './appearance.jsx';
 import { installApp, installState, reminderSupported, reminderEnabled, setReminder } from './attention.js';
+import { isTestedTtVersion } from './tt-host.js';
 
 const CAPABILITY_LABELS = {
     send: '发送消息', format: '旧消息排版', editText: '编辑消息', deleteMessage: '删除消息', swipe: '换回复', newChat: '开始新故事', groups: '群聊', branch: '换个走向', chapters: '故事起名和删除', cards: '前端卡片',
@@ -14,14 +15,18 @@ const CAPABILITY_LABELS = {
 
 function About({ engineReady }) {
     const [serverVersion, setServerVersion] = useState('');
-    useEffect(() => { api.getServerVersion().then(setServerVersion); }, []);
+    const [ttVersion, setTtVersion] = useState('');
+    useEffect(() => { api.getServerVersion().then(setServerVersion); api.getTtVersion().then(setTtVersion); }, []);
     const info = engineReady ? engine.engineInfo() : null;
     const version = info?.version ?? serverVersion;
     const tested = engine.isTestedVersion(version);
     const missing = info ? Object.entries(info.capabilities).filter(([, ok]) => !ok).map(([name]) => CAPABILITY_LABELS[name] ?? name) : [];
     return (
         <section class="tl-about">
-            <p class="tl-muted">轻酒馆 {__APP_VERSION__} · 酒馆 {version || '未知'} · {version ? (tested ? '已验证' : '未验证此版本') : '版本未知'}</p>
+            {api.onTauriTavern
+                // TT carries SillyTavern's frontend of some version and changes parts of it: its own release is what was checked.
+                ? <p class="tl-muted">轻酒馆 {__APP_VERSION__} · TT 酒馆 {ttVersion || '未知'}（原版 {version || '未知'}） · {ttVersion ? (isTestedTtVersion(ttVersion) ? '已验证' : '未验证此版本') : '版本未知'}</p>
+                : <p class="tl-muted">轻酒馆 {__APP_VERSION__} · 酒馆 {version || '未知'} · {version ? (tested ? '已验证' : '未验证此版本') : '版本未知'}</p>}
             {missing.length > 0 && <p class="tl-error">当前酒馆版本缺少：{missing.join('、')}，请在原版界面使用</p>}
         </section>
     );
@@ -104,7 +109,7 @@ export function MePage({ user, eng, notify, onOpenReading, onOpenCss, onOpenTool
                 {current ? <img class="tl-avatar" src={personaThumb(current.id)} alt="" /> : user.avatar && <img class="tl-avatar" src={user.avatar} alt="" />}
                 <span class="tl-card-text">
                     <strong class="tl-card-name">{current?.name || user.name || user.handle}</strong>
-                    <span class="tl-card-meta">{persona ? `我的身份${persona.isDefault ? ' · 默认' : ''}` : '准备好后可换身份'} · 账号 {user.handle}</span>
+                    <span class="tl-card-meta">{persona ? `我的身份${persona.isDefault ? ' · 默认' : ''}` : '准备好后可换身份'}{api.onTauriTavern ? '' : ` · 账号 ${user.handle}`}</span>
                 </span>
             </button>
 
@@ -152,22 +157,25 @@ export function MePage({ user, eng, notify, onOpenReading, onOpenCss, onOpenTool
                 <h2 class="tl-section-title">设置与扩展</h2>
                 <div class="tl-list">
                     <Item label="设置与扩展" hint="世界书、预设、正则、扩展的面板、原版设置" onClick={onOpenTools} />
-                    <Item label="加载的扩展（仅本机）"
+                    {/* TT's page is the one already running: the shell loads nothing of its own there. */}
+                    {!api.onTauriTavern && <Item label="加载的扩展（仅本机）"
                         hint={engine.skippedExtensions().length
                             ? `已关掉 ${engine.skippedExtensions().length} 个`
                             : '全部加载 · 关掉用不到的能更快'}
-                        onClick={() => import('./extensions-sheet.jsx').then(m => setSkipSheet(() => m.SkipExtensionsSheet)).catch(e => notify(e.message))} />
+                        onClick={() => import('./extensions-sheet.jsx').then(m => setSkipSheet(() => m.SkipExtensionsSheet)).catch(e => notify(e.message))} />}
                     <Item label="酒馆助手" hint="显示角色卡里的界面和按钮" onClick={() => openUpkeep('HelperSheet')} />
                 </div>
             </section>
             <section class="tl-section">
                 <h2 class="tl-section-title">高级</h2>
                 <div class="tl-list">
-                    <button class="tl-list-item tl-switch-row" role="switch" aria-checked={eng.mode !== 'auto' ? 'true' : 'false'}
-                        onClick={() => engine.setEngineMode(eng.mode === 'auto' ? 'input' : 'auto')}>
-                        <span class="tl-list-label">省流量（仅本机）</span>
-                        <span class="tl-list-hint">开始写时才准备，第一次发送稍慢</span>
-                    </button>
+                    {!api.onTauriTavern && (
+                        <button class="tl-list-item tl-switch-row" role="switch" aria-checked={eng.mode !== 'auto' ? 'true' : 'false'}
+                            onClick={() => engine.setEngineMode(eng.mode === 'auto' ? 'input' : 'auto')}>
+                            <span class="tl-list-label">省流量（仅本机）</span>
+                            <span class="tl-list-hint">开始写时才准备，第一次发送稍慢</span>
+                        </button>
+                    )}
                     <Item label="自定义 CSS" hint="自己写样式" onClick={onOpenCss} />
                 </div>
             </section>
@@ -200,7 +208,9 @@ export function MePage({ user, eng, notify, onOpenReading, onOpenCss, onOpenTool
 
             <section class="tl-section">
                 <div class="tl-list">
-                    <Item label={leaving ? <><Spinner />正在退出…</> : '退出登录'} danger busy={leaving} onClick={logout} />
+                    {api.onTauriTavern
+                        ? <Item label="回到 TT 酒馆" hint="轻酒馆留在原处，菜单里再打开" onClick={engine.hideTtShell} />
+                        : <Item label={leaving ? <><Spinner />正在退出…</> : '退出登录'} danger busy={leaving} onClick={logout} />}
                 </div>
                 <About engineReady={eng.state === 'ready'} />
             </section>

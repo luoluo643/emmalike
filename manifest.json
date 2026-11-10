@@ -7,7 +7,7 @@
     "css": "style.css",
     "generate_interceptor": "tavernLiteLineContext",
     "author": "icetea",
-    "version": "0.16.2",
+    "version": "0.17.0",
     "homePage": "https://github.com/luoluo643/emmalike",
     "auto_update": true
 }

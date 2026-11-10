@@ -82,6 +82,21 @@ test('a switch answers with the named preset read moments ago; opening and expli
     f.externalFile({ top_p: .5 });
     assert.equal((await f.bridge.presetEditorState()).named.top_p, .5, 'changes made elsewhere show on the next plain read');
 });
+test("an entry's name changes at once, keeps its identifier, and waits to be saved to the preset", async () => {
+    const f = createPresetFixture(), name = id => f.current().prompts.find(p => p.identifier === id).name;
+    await f.bridge.presetEditorState();
+    const renamed = await f.bridge.presetEditorRenamePrompt(input({ identifier: "secondary", base: "Secondary", value: "  我的条目  " }));
+    assert.equal(name("secondary"), "我的条目", "surrounding spaces are not part of the name");
+    assert.deepEqual(renamed.prompts.map(p => p.identifier), ["main", "advanced", "secondary"]);
+    assert.ok(renamed.changes.some(c => c.path[0] === "prompts" && c.path.at(-1) === "name"), "shows as a change not yet saved to the named preset");
+    assert.equal(f.counters().writes, 0, "the named preset file is not written");
+    await assert.rejects(f.bridge.presetEditorRenamePrompt(input({ identifier: "main", base: "Main", value: "   " })), e => e.code === "PRESET_FIELD_INVALID");
+    await assert.rejects(f.bridge.presetEditorRenamePrompt(input({ identifier: "main", base: "Changed elsewhere", value: "新名字" })), e => e.code === "PRESET_FIELD_CONFLICT");
+    await assert.rejects(f.bridge.presetEditorRenamePrompt(input({ identifier: "gone", base: "", value: "新名字" })), e => e.code === "PRESET_PROMPT_MISSING");
+    assert.equal(name("main"), "Main", "nothing renamed on a refusal");
+    await f.bridge.presetEditorRenamePrompt(input({ identifier: "secondary", base: "Secondary", value: "我的条目" }));
+    assert.equal(name("secondary"), "我的条目", "repeating a rename that already happened is not a conflict");
+});
 test("entries move and copy against the order the page showed; a list changed meanwhile is not rearranged", async () => {
     const f = createPresetFixture(), order = () => f.current().prompts.map(p => p.identifier);
     await f.bridge.presetEditorState();

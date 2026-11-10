@@ -17,13 +17,17 @@ import { MePage } from './me.jsx';
 import { ModelSheet } from './model.jsx';
 import { giveLetterPicture } from './persona.jsx';
 import { Reader } from './reader.jsx';
+import { ReturnHandle } from './return-handle.jsx';
 import { refreshBootLook, setAppearanceAccount, syncAppearanceWithAccount } from './theme.js';
 import { ThemeEditor } from './theme-editor.jsx';
 import { CharacterEditor } from './editor.jsx';
 import { ToolsSheet } from './tools.jsx';
-import { NativePopupSheet, Spinner, friendlyError, go, goBack, parseHash, routeHash, storage, trackProgress, useBackLayer, useEngine, useProgress, wasLayerPop } from './ui.jsx';
+import { NativePopupSheet, Spinner, friendlyError, go, goBack, parseHash, routeHash, shellBack, storage, trackProgress, useBackLayer, useEngine, useProgress, wasLayerPop } from './ui.jsx';
 import { WorkPage } from './work.jsx';
 import { fitIphoneHomeScreen } from './ios-standalone.js';
+import { installTtRequests, isTestedTtVersion } from './tt-host.js';
+
+installTtRequests(window);
 
 // Pages most visits never show are loaded when first opened.
 const PAGES = {
@@ -317,9 +321,15 @@ function App() {
                 // The account's picture is read from its persona, so the header shows the new one after a re-read.
                 giveLetterPicture(userRef.current?.name).then(() => api.getCurrentUser()).then(u => u && setUser(u)).catch(() => { });
             }
+            if (api.onTauriTavern) api.getTtVersion().then(version => {
+                const key = `tavern-lite:untested-tt-warned:${version}`;
+                if (!version || isTestedTtVersion(version) || storage(s => s.getItem(key))) return;
+                storage(s => s.setItem(key, '1'));
+                notify(`TT 酒馆 ${version} 还没在轻酒馆验证过，遇到问题可以用原版界面`, 'warning');
+            });
             const info = engine.engineInfo();
             const warnedKey = `tavern-lite:untested-warned:${info?.version}`;
-            if (info && !info.tested && !storage(s => s.getItem(warnedKey))) {
+            if (info && !info.tested && !api.onTauriTavern && !storage(s => s.getItem(warnedKey))) {
                 storage(s => s.setItem(warnedKey, '1'));
                 notify(`酒馆 ${info.version} 还没在轻酒馆验证过，遇到问题可以用原版界面`, 'warning');
             }
@@ -407,7 +417,7 @@ function App() {
                     <button class="tl-button" onClick={retryChatSync}>现在补存</button>
                 </div>
             )}
-            {nativeVisible && <button class="tl-button tl-primary tl-return" onClick={() => { autoShown.current = false; showNative(false); }}>返回轻酒馆</button>}
+            {nativeVisible && <ReturnHandle onReturn={() => { autoShown.current = false; showNative(false); }} />}
             {user && sheet === 'personal' && <PersonalSheet user={user} notify={notify} onClose={() => setSheet(null)} onLocate={async source => {
                 if (source.groupId) {
                     await withBridge('回到摘录出处', b => b.revealPersonalSource(source));
@@ -424,8 +434,11 @@ function App() {
     );
 }
 
+// TT 酒馆 hands the phone's back button to the shell through index.js instead of the page's history.
+// The screen stays on while a reply is written either way; adding to the home screen is for browsers only.
+if (engine.onTauriTavern) window.tavernLiteBack = shellBack;
 installAttention();
-fitIphoneHomeScreen();
+if (!engine.onTauriTavern) fitIphoneHomeScreen();
 engine.routeChatRequests({ save: saveThroughSync, get: getThroughSync });
 // iOS Safari only shows the pressed look (:active) on a page that listens for touches.
 document.addEventListener('touchstart', () => {}, { passive: true });

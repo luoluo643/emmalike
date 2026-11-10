@@ -5,6 +5,7 @@
 // - Panels other extensions add under a message (Horae's status bar, for example) are mirrored in an isolated frame;
 //   taps and input in the mirror are replayed on the real panel in the full app, which then updates the mirror.
 import * as engine from './engine.js';
+import { onTauriTavern } from './api.js';
 
 // The shell's copy of a card keeps running while the full app shows its own, so what the reader did in it is still there
 // afterwards. Same-origin pages can hear each other, though: a status bar that freezes when a "newer" copy announces
@@ -17,6 +18,19 @@ const OWN_CHANNELS = `<script>(function () {
         constructor(name) { super(PREFIX + name); }
         get name() { return super.name.slice(PREFIX.length); }
     };
+})();<\/script>`;
+
+// On TT 酒馆 the app answers requests only from its own page and the frames placed directly on it (the shell). A card's
+// frame is one level further in, so its fetch goes through the shell's (a URL keeps the card's own base).
+const TT_REQUESTS = `<script>(function () {
+    try {
+        var up = window.parent;
+        if (!up || up === window || typeof up.fetch !== 'function') return;
+        window.fetch = function (input, init) {
+            if (typeof input === 'string' || input instanceof URL) input = new URL(String(input), document.baseURI).href;
+            return up.fetch(input, init);
+        };
+    } catch (e) { /* the shell is between pages */ }
 })();<\/script>`;
 
 // What Tavern Helper's card pages read from window.parent (its iframe predefine script and helpers).
@@ -93,7 +107,7 @@ function startCard(slot) {
     // own frame for the same card (its listeners are kept per frame name).
     frame.id = frame.name = `${slot.dataset.frame}_${++serial}`;
     frame.title = '前端卡片';
-    frame.srcdoc = source.replace(/<head[^>]*>/i, head => head + OWN_CHANNELS);
+    frame.srcdoc = source.replace(/<head[^>]*>/i, head => head + OWN_CHANNELS + (onTauriTavern ? TT_REQUESTS : ''));
     slot.append(frame);
 }
 

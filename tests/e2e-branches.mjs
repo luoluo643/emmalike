@@ -76,6 +76,26 @@ try {
     const path = page.locator('.tl-branch-path');
     await path.waitFor();
     check('inside the line a path leads back to the 正文', (await path.innerText()).includes('正文') && (await path.innerText()).includes(TITLE), await path.innerText());
+    // The path follows the finger: reading on hides it — at the bottom too, where the header stays — pulling back shows it.
+    {
+        const list = page.locator('.tl-messages');
+        await list.evaluate(el => { const pad = document.createElement('div'); pad.className = 'tl-test-pad'; pad.style.height = '3000px'; pad.style.flex = 'none'; el.prepend(pad); el.scrollTop = 0; });
+        await page.waitForTimeout(2500);
+        const state = () => page.evaluate(() => { const l = document.querySelector('.tl-messages'); return [document.querySelector('.tl-branch-path')?.dataset.hidden ?? '', document.querySelector('.tl-reader-header')?.dataset.hidden ?? '', Math.round(l.scrollTop), l.scrollHeight, l.clientHeight, !!l.querySelector('.tl-test-pad')]; });
+        const scrollTo = async to => { await list.evaluate((el, y) => { el.scrollTop = y === 'end' ? el.scrollHeight : el.scrollTop + y; }, to); await page.waitForTimeout(400); };
+        // Adding the pad sticks the list to its bottom; start from the top, then read on.
+        await list.evaluate(el => { el.scrollTop = 0; });
+        await page.waitForTimeout(600);
+        await scrollTo(400);
+        const down = await state();
+        await scrollTo('end');
+        const bottom = await state();
+        await scrollTo(-300);
+        const up = await state();
+        await list.evaluate(el => el.querySelector('.tl-test-pad')?.remove());
+        check('reading on hides the path, also at the bottom where the header shows; pulling back shows it',
+            down[0] === 'true' && bottom[0] === 'true' && bottom[1] === '' && up[0] === '', JSON.stringify({ down, bottom, up }));
+    }
     // The copy of the 正文 is folded: the line reads as its own story, the copy one tap away.
     const note = page.locator('.tl-copied-note');
     await note.waitFor({ timeout: 30000 }).catch(() => { });
