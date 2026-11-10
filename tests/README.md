@@ -78,4 +78,4 @@ PROJECT=tlregexdraft ST_PORT=8103 MOCK_PORT=5073 ST_IMAGE=ghcr.io/sillytavern/si
 
 1. 把工作副本（`index.js`、`manifest.json`、`style.css`、`bridge*.js`、`src/`、`app/`）放进 TT 数据目录的 `default-user/extensions/<文件夹>`，在 TT 里重载。
 2. `adb forward tcp:9258 localabstract:$(adb shell cat /proc/net/unix | grep -o 'webview_devtools_remote_[0-9]*' | head -1)`
-3. `node tests/tt-smoke.mjs http://127.0.0.1:9258`；加 `--generate` 时还会发送、生成新回复和删除，需要 TT 连着模型：本机跑 `node tests/mock-llm.mjs`，TT 的自定义地址填 `http://10.0.2.2:5001/v1`（模拟器访问电脑用这个地址，`adb reverse` 的 127.0.0.1 TT 连不上），TT 第一次会弹框问要不要信任这个地址。
+3. `node tests/tt-smoke.mjs http://127.0.0.1:9258`；加 `--generate` 时还会发送、生成新回复和删除，需要 TT 连着模型：本机跑 `node tests/mock-llm.mjs`，TT 的自定义地址填 `http://10.0.2.2:5001/v1`（模拟器访问电脑用这个地址，`adb reverse` 的 127.0.0.1 TT 连不上），TT 第一次会弹框问要不要信任这个地址。带 `--generate` 的那组还查轻酒馆隐藏期间的事（回复写完、在原版里开始生成、切故事、浮层增删）、浮层相交时的实际点击、刷新时隐藏不抢 TT 输入框焦点、安装或更新后重载 TT 主页面并自动打开；最后一项会重载 TT。

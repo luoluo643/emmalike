@@ -10,6 +10,8 @@ export const TT_SHELL_MARK = 'tt-shell';
 export const TT_ACCOUNT = 'default-user';
 /** TT releases the shell was checked on (in the app, on Android). */
 export const TESTED_TT_VERSIONS = ['2.4.0'];
+/** Set in TT's page's session storage before the shell reloads it (after an install or update): open the shell again. */
+export const TT_REOPEN_KEY = 'tavern-lite:tt-reopen';
 
 /** Whether `win` is TT's page. */
 export function isTauriTavern(win = globalThis) {
@@ -106,11 +108,51 @@ export function missingChatAnswer(status, text) {
  * (the full app's floating layers while the shell is on screen).
  */
 export function clipWithHoles(rects, width, height, margin = 2) {
-    const holes = rects.map(r => {
-        const x = r.x - margin, y = r.y - margin, w = r.width + 2 * margin, h = r.height + 2 * margin;
-        return `M${x} ${y}h${w}v${h}h${-w}z`;
-    }).join('');
+    // Even-odd filling counts every edge crossed: two holes laid over each other would fill their overlap again. So
+    // the holes are first made into rectangles that do not overlap and cover the same area.
+    const grown = rects.map(r => ({ x: r.x - margin, y: r.y - margin, width: r.width + 2 * margin, height: r.height + 2 * margin }));
+    const holes = disjointRects(grown, width, height).map(r => `M${r.x} ${r.y}h${r.width}v${r.height}h${-r.width}z`).join('');
     return `path(evenodd, 'M0 0H${width}V${height}H0z${holes}')`;
+}
+
+/**
+ * Rectangles that do not overlap and cover the same area as `rects` within 0..width × 0..height (each one cut to
+ * it): bands between the rectangles' top and bottom edges, each band's covered stretches joined, and a stretch that
+ * goes on unchanged in the band below grown into it.
+ */
+export function disjointRects(rects, width, height) {
+    const boxes = rects.map(r => [Math.max(0, r.x), Math.max(0, r.y), Math.min(width, r.x + r.width), Math.min(height, r.y + r.height)])
+        .filter(([x0, y0, x1, y1]) => x1 > x0 && y1 > y0);
+    const xs = [...new Set(boxes.flatMap(b => [b[0], b[2]]))].sort((a, b) => a - b);
+    const ys = [...new Set(boxes.flatMap(b => [b[1], b[3]]))].sort((a, b) => a - b);
+    const out = [];
+    let open = new Map();
+    for (let j = 0; j + 1 < ys.length; j++) {
+        const y0 = ys[j], y1 = ys[j + 1];
+        const spans = [];
+        for (let i = 0; i + 1 < xs.length; i++) {
+            const x0 = xs[i], x1 = xs[i + 1];
+            if (!boxes.some(b => b[0] <= x0 && b[2] >= x1 && b[1] <= y0 && b[3] >= y1)) continue;
+            const last = spans[spans.length - 1];
+            if (last && last[1] === x0) last[1] = x1;
+            else spans.push([x0, x1]);
+        }
+        const next = new Map();
+        for (const [x0, x1] of spans) {
+            const key = `${x0},${x1}`;
+            const above = open.get(key);
+            if (above) {
+                above.height = y1 - above.y;
+                next.set(key, above);
+            } else {
+                const rect = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+                out.push(rect);
+                next.set(key, rect);
+            }
+        }
+        open = next;
+    }
+    return out;
 }
 
 /** A clip-path showing only `rects` (the way back to the shell while TT's page is shown). */

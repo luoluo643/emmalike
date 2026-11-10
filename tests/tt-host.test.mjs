@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clipToRects, clipWithHoles, installTtRequests, isTauriTavern, isTestedTtVersion, missingChatAnswer, ttHostWindow, ttSillyTavernVersion, ttUser, ttVersionOf, unsupportedEndpoint, TT_ACCOUNT, TT_SHELL_MARK } from '../src/tt-host.js';
+import { clipToRects, clipWithHoles, disjointRects, installTtRequests, isTauriTavern, isTestedTtVersion, missingChatAnswer, ttHostWindow, ttSillyTavernVersion, ttUser, ttVersionOf, unsupportedEndpoint, TT_ACCOUNT, TT_SHELL_MARK } from '../src/tt-host.js';
 
 function shellIn(host, mark = TT_SHELL_MARK) {
     return { parent: host, frameElement: { dataset: { tavernLite: mark } }, location: { href: 'http://tauri.localhost/scripts/extensions/third-party/x/app/index.html', origin: 'http://tauri.localhost' }, URL };
@@ -61,4 +61,38 @@ test('the shell sends API reads to TT\'s page and everything else on as before',
     assert.equal(await shell.fetch('https://example.com/api/x'), 'own');
     assert.deepEqual(seen[0], ['host', 'http://tauri.localhost/api/characters/all', 'POST']);
     assert.equal(installTtRequests(shellIn({})), false, 'not on a server');
+});
+
+// Whether (x, y) is cut out by an even-odd clip made of the outer frame and `holes`: the number of holes holding it,
+// plus the frame, is even.
+function cutAt(holes, x, y) {
+    return holes.filter(r => x > r.x && x < r.x + r.width && y > r.y && y < r.y + r.height).length % 2 === 1;
+}
+
+test('holes that overlap are cut out as one area: every point of any rectangle is cut, nothing else is', () => {
+    const cases = {
+        crossing: [{ x: 20, y: 100, width: 100, height: 100 }, { x: 70, y: 150, width: 100, height: 100 }],
+        inside: [{ x: 10, y: 10, width: 200, height: 200 }, { x: 50, y: 50, width: 20, height: 20 }],
+        same: [{ x: 30, y: 30, width: 40, height: 40 }, { x: 30, y: 30, width: 40, height: 40 }],
+        touching: [{ x: 0, y: 0, width: 50, height: 50 }, { x: 50, y: 0, width: 50, height: 50 }],
+        outside: [{ x: -40, y: -40, width: 80, height: 80 }, { x: 380, y: 780, width: 100, height: 100 }, { x: 500, y: 500, width: 10, height: 10 }],
+        three: [{ x: 10, y: 10, width: 60, height: 60 }, { x: 40, y: 40, width: 60, height: 60 }, { x: 25, y: 55, width: 10, height: 100 }],
+    };
+    const W = 400, H = 800;
+    for (const [name, rects] of Object.entries(cases)) {
+        const holes = disjointRects(rects, W, H);
+        for (const r of holes) {
+            assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.width <= W && r.y + r.height <= H, `${name}: inside the frame`);
+        }
+        for (let x = 0.5; x < W; x += 5) {
+            for (let y = 0.5; y < H; y += 5) {
+                const want = rects.some(r => x > r.x && x < r.x + r.width && y > r.y && y < r.y + r.height);
+                assert.equal(cutAt(holes, x, y), want, `${name} at ${x},${y}`);
+            }
+        }
+    }
+    assert.equal(disjointRects(cases.crossing, W, H).length, 3);
+    assert.equal(disjointRects(cases.same, W, H).length, 1);
+    assert.deepEqual(disjointRects([], W, H), []);
+    assert.equal(clipWithHoles(cases.same, 100, 100, 0), "path(evenodd, 'M0 0H100V100H0zM30 30h40v40h-40z')");
 });

@@ -45,6 +45,11 @@ const HELPERS = `window.__ttSmoke = {
   async go(hash, ms = 3000) { const w = this.win(); w.history.pushState({ tavernLite: true }, '', hash || '#'); w.dispatchEvent(new w.Event('tl-route')); await this.sleep(ms); },
   answerTt() { const b = [...this.doc().querySelectorAll('button')].find(b => b.innerText.trim() === 'Not now'); if (b) b.click(); return !!b; },
   async settle() { let saw = false; for (let i = 0; i < 100; i++) { await this.sleep(400); this.answerTt(); if (this.label('停止') || this.doc().querySelector('.tl-swipe-status')) saw = true; else if (saw) break; } await this.sleep(1200); return saw; },
+  floats(rects) { this.unfloat(); return rects.map(([x, y, w, h]) => { const b = document.createElement('button'); b.className = 'tt-smoke-float'; b.textContent = 'x';
+    b.style.cssText = 'position:fixed;left:' + x + 'px;top:' + y + 'px;width:' + w + 'px;height:' + h + 'px;z-index:99999;margin:0;padding:0;'; document.body.append(b); return b; }); },
+  unfloat() { document.querySelectorAll('.tt-smoke-float').forEach(b => b.remove()); },
+  at(x, y) { const e = document.elementFromPoint(x, y); return e === this.frame() ? 'shell' : e?.classList?.contains('tt-smoke-float') ? 'float' : 'tt'; },
+  idle(ms = 90000) { return this.wait(() => !window.TavernLiteBridge.isGenerating(), ms); },
   async type(text) { const input = this.label('输入消息'); Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value').set.call(input, text); input.dispatchEvent(new (this.win().Event)('input', { bubbles: true })); await this.sleep(200); },
 }; 1`;
 
@@ -88,8 +93,33 @@ if (generate) {
     await check('the last message is deleted', `const c = SillyTavern.getContext(), n = c.chat.length; const menus = t.doc().querySelectorAll('[aria-label="消息操作"]'); menus[menus.length - 1].click(); await t.sleep(800);
         [...t.doc().querySelectorAll('button')].find(b => /^删除/.test(b.innerText.trim()))?.click(); await t.sleep(800);
         [...t.doc().querySelectorAll('.tl-sheet button')].find(b => /删除整条/.test(b.innerText))?.click(); await t.sleep(2500); return n - c.chat.length;`, v => v === 1);
+    // While the shell is hidden the story goes on in TT's page; coming back shows it as it is then.
+    await check('a reply that ends while the shell is hidden: back to 发送, not 停止', `await t.type('【慢】隐藏时写完'); t.label('发送').click();
+        const started = !!(await t.wait(() => t.label('停止'), 8000)); window.TavernLiteTt.hide(); await t.idle(); await t.sleep(2500);
+        window.TavernLiteTt.show(); await t.sleep(1200); await t.type('下一句');
+        return { started, stop: !!t.label('停止'), send: !!t.label('发送'), generating: window.TavernLiteBridge.isGenerating() };`,
+        v => v?.started && !v.stop && v.send && !v.generating);
+    await check('a reply that starts in TT while the shell is hidden shows 停止 when back', `await t.type(''); window.TavernLiteTt.hide(); await t.sleep(500);
+        const area = document.getElementById('send_textarea'); area.value = '【慢】原版里发'; area.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('send_but').click(); await t.wait(() => window.TavernLiteBridge.isGenerating(), 8000); await t.sleep(800);
+        window.TavernLiteTt.show(); await t.sleep(1200); const stop = !!t.label('停止'); await t.idle(); await t.sleep(2500);
+        return { stop, after: !!t.label('停止') };`, v => v?.stop === true && v.after === false);
+    await check('a story switched in TT while the shell is hidden: the shell follows it', `const c = SillyTavern.getContext(), here = c.getCurrentChatId();
+        const list = await (await fetch('/api/characters/chats', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ avatar_url: c.characters[c.characterId].avatar }) })).json();
+        const other = Object.values(list).map(x => String(x.file_name).replace(/\.jsonl$/, '')).find(n => n !== here);
+        window.TavernLiteTt.hide(); await t.sleep(300); await c.openCharacterChat(other); await t.sleep(2000);
+        window.TavernLiteTt.show(); await t.sleep(2500);
+        return { other, file: new URLSearchParams(t.win().location.hash.slice(1)).get('file'), native: SillyTavern.getContext().getCurrentChatId() };`,
+        v => v?.other && v.file === v.other && v.native === v.other);
 }
 
+await check('floating layers that overlap take touches over all of them', `const c = SillyTavern.getContext(), avatar = c.characters[c.characterId]?.avatar ?? c.characters[0].avatar;
+    await t.go('#' + new URLSearchParams({ chat: avatar, file: c.getCurrentChatId() ?? '' }), 4000);
+    t.floats([[20, 100, 100, 100], [70, 150, 100, 100]]); await t.wait(() => /evenodd/.test(t.frame().style.clipPath), 5000); await t.sleep(400);
+    return { one: t.at(40, 120), both: t.at(95, 175), other: t.at(150, 240), away: t.at(300, 500) };`,
+    v => v?.one === 'float' && v.both === 'float' && v.other === 'float' && v.away === 'shell');
+await check('a layer removed while the shell is hidden leaves no hole when back', `window.TavernLiteTt.hide(); await t.sleep(400); t.unfloat(); await t.sleep(1200);
+    window.TavernLiteTt.show(); await t.sleep(1000); return { clip: t.frame().style.clipPath, at: t.at(95, 175) };`, v => v?.clip === '' && v.at === 'shell');
 await check('TT’s page shown: the shell is cut down to its return tab', `const c = SillyTavern.getContext(), avatar = c.characters[c.characterId]?.avatar ?? c.characters[0].avatar;
     await t.go('#' + new URLSearchParams({ chat: avatar, file: c.getCurrentChatId() ?? '' }), 4000);
     t.label('更多').click(); await t.sleep(800);
@@ -106,6 +136,15 @@ await check('back button: pages first, then leaving the shell; TT keeps the pres
     const last = window.__TAURITAVERN_HANDLE_BACK__(); await t.sleep(600);
     return { first, afterFirst, last, hidden: t.frame().hidden };`, v => v?.first === true && !v.afterFirst.hidden && v.last === true && v.hidden === true);
 await check('menu opens the shell again as it was', `document.getElementById('tavern-lite-open').click(); await t.sleep(800); return !t.frame().hidden && !!t.doc().querySelector('.tl-app');`, v => v === true);
+
+await check('shell hidden while its page reloads leaves TT’s input to type in', `t.win().location.reload(); window.TavernLiteTt.hide();
+    await t.sleep(12000); const area = document.getElementById('send_textarea'); area.focus(); await t.sleep(400);
+    const focused = document.activeElement === area; area.blur(); window.TavernLiteTt.show(); await t.sleep(600);
+    return { focused, shown: !t.frame().hidden };`, v => v?.focused && v.shown);
+await check('after an install or update the shell reloads TT’s page and opens again', `sessionStorage.setItem('tavern-lite:tt-reopen', '1'); location.reload(); return 1;`, v => v === 1);
+await new Promise(resolve => setTimeout(resolve, 15000));
+await evaluate(HELPERS);
+await check('… the shell is open again after TT’s page reloaded', `return !!(await t.wait(() => t.frame() && !t.frame().hidden && t.doc()?.querySelector('.tl-app'), 40000)) && !sessionStorage.getItem('tavern-lite:tt-reopen');`, v => v === true);
 
 ws.close();
 const failed = results.filter(r => !r.ok);

@@ -3,7 +3,7 @@ import * as openai from '/scripts/openai.js';
 import * as groups from '/scripts/group-chats.js';
 import { installNativeSettleBootstrap } from './bridge-native-bootstrap.js';
 import { installLineContext } from './bridge-line-context.js';
-import { isTauriTavern, TT_SHELL_MARK } from './src/tt-host.js';
+import { isTauriTavern, TT_REOPEN_KEY, TT_SHELL_MARK } from './src/tt-host.js';
 
 const appUrl = new URL('./app/', import.meta.url).href;
 
@@ -59,6 +59,10 @@ function openTtShell() {
         frame.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;margin:0;padding:0;z-index:2147483000;background:transparent;';
         // The address names the page itself: TT serves no folder index.
         frame.src = new URL('index.html', appUrl).href;
+        // Each page the frame loads is told where it stands: a hide or show sent while it loaded went to the one before.
+        frame.addEventListener('load', () => {
+            try { frame.contentWindow?.dispatchEvent(new Event(frame.hidden ? 'tl-tt-hidden' : 'tl-tt-shown')); } catch { /* gone again */ }
+        });
         document.body.append(frame);
     }
     frame.hidden = false;
@@ -100,6 +104,14 @@ if (runningAsEngine()) {
     addMenuEntry(openTtShell);
     eventSource.on(eventTypes.APP_READY, () => addMenuEntry(openTtShell));
     installTtBack();
+    // The shell reloaded this page after installing or updating an extension: it opens again where it was.
+    let reopen = false;
+    try {
+        reopen = sessionStorage.getItem(TT_REOPEN_KEY) === '1';
+        sessionStorage.removeItem(TT_REOPEN_KEY);
+    } catch { /* no storage: the menu opens it */ }
+    // TT runs extensions after its app is ready, so this is that moment.
+    if (reopen) openTtShell();
 } else {
     const { eventSource, eventTypes } = SillyTavern.getContext();
     const open = () => { location.href = appUrl; };

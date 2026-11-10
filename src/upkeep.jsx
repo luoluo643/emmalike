@@ -3,7 +3,7 @@ import * as engine from './engine.js';
 import { HELPER, checkUpdate, helperStatus, installHelper, releaseNotes, updateLite } from './upkeep.js';
 import { Sheet, SheetItem, friendlyError } from './ui.jsx';
 
-const reload = () => location.reload();
+const reload = () => engine.reloadWithApp();
 
 /** Installs Tavern Helper from its official repository, saying whose it is and under which license. */
 export function HelperSheet({ notify, onClose }) {

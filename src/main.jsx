@@ -168,6 +168,14 @@ function App() {
         };
     }, []);
 
+    // Back from the full app, where another story may have been opened: the story page follows it.
+    const followNativeChat = () => {
+        const current = engine.getBridge()?.currentChat();
+        const now = parseHash();
+        if (current?.avatar && now.name === 'chat' && !now.fresh && (current.avatar !== now.avatar || (now.file && current.file !== now.file))) {
+            go({ name: 'chat', avatar: current.avatar, file: current.file }, true);
+        }
+    };
     const showNative = useCallback(visible => {
         if (visible && engine.getBridge()?.episodeNavigationBusy?.()) {
             notify('还在发送，等它完成或停止生成', 'info');
@@ -176,14 +184,10 @@ function App() {
         engine.showNative(visible);
         setNativeVisible(visible);
         if (visible) setPopupWaiting(false);
-        if (!visible) {
-            const current = engine.getBridge()?.currentChat();
-            const now = parseHash();
-            if (current?.avatar && now.name === 'chat' && !now.fresh && (current.avatar !== now.avatar || (now.file && current.file !== now.file))) {
-                go({ name: 'chat', avatar: current.avatar, file: current.file }, true);
-            }
-        }
+        if (!visible) followNativeChat();
     }, []);
+    // TT: the shell comes back from the menu after the reader used TT's own page, perhaps for another story.
+    useEffect(() => engine.onEngine(type => { if (type === 'tt-shown') followNativeChat(); }), []);
 
     /**
      * Runs an action on the full app, waiting for it to load first if needed. Errors are shown and rethrown. While it

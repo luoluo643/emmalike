@@ -9,7 +9,7 @@ export const NETWORK_FAILURE = '网络断了，没加载完';
 // Signed out (expired, or logged out elsewhere): the server answers the full app's page with its login page, which never
 // gets ready. Said at once instead of after the 4 minute limit.
 export const LOGIN_FAILURE = '登录过期了，请重新登录';
-import { clipToRects, clipWithHoles, ttHostWindow } from './tt-host.js';
+import { clipToRects, clipWithHoles, ttHostWindow, TT_REOPEN_KEY } from './tt-host.js';
 
 const BRIDGE_URL = new URL('../bridge.js', location.href).href;
 // On TT 酒馆 (src/tt-host.js) the full app is TT's own page, which the shell is laid over: nothing is loaded, the
@@ -501,11 +501,13 @@ async function connectBridge(run, connection) {
     }
     unsubscribe?.();
     unsubscribe = bridge.on((type, detail) => {
-        if (ttHost && ttShellHidden) return;
         if (run !== attempt || run.frame !== iframe || run.frame.contentDocument !== connection.binding.document) return;
         if (type === 'floats') setFloats(detail);
-        emit(type, detail);
+        if (ttHost && ttShellHidden) holdWhileHidden(type, detail);
+        else emit(type, detail);
     });
+    // The page may have been hidden while it loaded, before its listeners were there to hear it: ask the frame.
+    if (ttHost) ttShellHidden = ttFrameHidden();
     bridge.setShellShowing?.(!isNativeVisible() && !ttShellHidden);
     setFloats(bridge.floatingLayers?.() ?? []);
     if (!currentConnection(run, connection)) return;
@@ -857,6 +859,41 @@ function ttShellFrame() {
     try { return window.frameElement; } catch { return null; }
 }
 
+/** Whether index.js has the shell hidden now: its frame says so, whatever events this page missed while loading. */
+function ttFrameHidden() {
+    return !!ttShellFrame()?.hidden;
+}
+
+// While the shell is hidden it draws nothing, but the story goes on in TT's page (a reply finishes, a layer closes, a
+// story is switched). What the bridge says meanwhile is kept, the latest of each kind, and said when the shell comes
+// back, followed by the state as it is then. Toasts and popups were TT's own to show while it was on screen.
+const heldEvents = new Map();
+const HELD_EACH = new Set(['chapter-renamed', 'account-changed']);
+let heldCount = 0;
+
+function holdWhileHidden(type, detail) {
+    if (type === 'toast' || type === 'popup' || type === 'floats' || type === 'generating') return;
+    const key = HELD_EACH.has(type) ? `${type}#${heldCount++}` : type;
+    heldEvents.delete(key);
+    heldEvents.set(key, { type, detail });
+}
+
+function replayHeld() {
+    const held = [...heldEvents.values()];
+    heldEvents.clear();
+    for (const { type, detail } of held) emit(type, detail);
+    if (!bridge) return;
+    let generating = false;
+    try { generating = !!bridge.isGenerating?.(); } catch { /* TT's page is between documents */ }
+    emit('generating', generating);
+    emit('chat');
+    emit('inputs');
+    let rects = [];
+    try { rects = bridge.floatingLayers?.() ?? []; } catch { /* as above */ }
+    setFloats(rects);
+    emit('tt-shown');
+}
+
 function applyTtClip() {
     const frame = ttShellFrame();
     if (!frame) return;
@@ -902,13 +939,16 @@ function watchReturnHandle(on) {
 if (ttHost) {
     addEventListener('resize', () => applyTtClip());
     // index.js hides the frame when the reader leaves the shell, and shows it from the menu.
+    ttShellHidden = ttFrameHidden();
     addEventListener('tl-tt-hidden', () => {
         ttShellHidden = true;
         getBridge()?.setShellShowing?.(false);
     });
     addEventListener('tl-tt-shown', () => {
+        const wasHidden = ttShellHidden;
         ttShellHidden = false;
         getBridge()?.setShellShowing?.(!isNativeVisible());
+        if (wasHidden) replayHeld();
         applyTtClip();
     });
     // The bridge stays in TT's page when this page reloads: what it would tell this page goes nowhere after that.
@@ -917,6 +957,26 @@ if (ttHost) {
         unsubscribe = undefined;
         try { bridge?.setShellShowing?.(false); } catch { /* TT's page is gone too */ }
     });
+}
+
+/**
+ * Reloads the shell with the full app, after an extension was installed or updated: both need the new code. On a
+ * server the full app is inside this page and goes with it. On TT the full app is the page around it and keeps the
+ * bridge it has, so TT's page reloads (the open story saved first) and opens the shell again.
+ */
+export async function reloadWithApp() {
+    if (ttHost) {
+        try {
+            const c = ttHost.SillyTavern?.getContext?.();
+            if (c?.chatId && typeof c.saveChat === 'function') await Promise.race([c.saveChat(), new Promise(resolve => setTimeout(resolve, 5000))]);
+        } catch { /* reload anyway: TT keeps what it saved */ }
+        try { ttHost.sessionStorage.setItem(TT_REOPEN_KEY, '1'); } catch { /* then the menu opens it */ }
+        try {
+            ttHost.location.reload();
+            return;
+        } catch { /* TT's page refused: the shell at least */ }
+    }
+    location.reload();
 }
 
 /** Leaves the shell for TT's page (index.js keeps it as it was; the menu opens it again). */
