@@ -8,8 +8,16 @@
 export const TT_SHELL_MARK = 'tt-shell';
 /** TT's only user, the name SillyTavern gives the single user without accounts. */
 export const TT_ACCOUNT = 'default-user';
-/** TT releases the shell was checked on (in the app, on Android). */
-export const TESTED_TT_VERSIONS = ['2.4.0'];
+/**
+ * The TT builds the shell was checked on: one platform, one release and the build TT reports for it (TT has re-issued
+ * a release under the same number), and the day. Only an exact match is called verified; anything else says what was.
+ */
+export const TESTED_TT_BUILDS = [
+    { platform: 'android', version: '2.4.0', revision: 'fff9af0333be', date: '2026-11-10' },
+];
+/** The releases among them (older callers). */
+export const TESTED_TT_VERSIONS = [...new Set(TESTED_TT_BUILDS.map(build => build.version))];
+export const TT_PLATFORM_NAMES = { android: '安卓', ios: 'iOS', windows: 'Windows', macos: 'macOS', linux: 'Linux' };
 /** Set in TT's page's session storage before the shell reloads it (after an install or update): open the shell again. */
 export const TT_REOPEN_KEY = 'tavern-lite:tt-reopen';
 
@@ -76,6 +84,50 @@ export function ttVersionOf(info) {
     return typeof value === 'string' ? value.trim() : '';
 }
 
+/** The system TT runs on, from its page's user agent ('' when unknown). iPads ask for desktop pages, so a "Mac" with a
+ * touch screen is iOS. */
+export function ttPlatformOf(userAgent, touchPoints = 0) {
+    const ua = String(userAgent ?? '');
+    if (/Android/i.test(ua)) return 'android';
+    if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && Number(touchPoints) > 1)) return 'ios';
+    if (/Windows/i.test(ua)) return 'windows';
+    if (/Macintosh|Mac OS X/i.test(ua)) return 'macos';
+    if (/Linux|X11|CrOS/i.test(ua)) return 'linux';
+    return '';
+}
+
+/** What /version and the page tell about the TT running: { version, revision, platform } ('' where unknown). */
+export function ttBuildOf(info, userAgent, touchPoints = 0) {
+    const revision = info?.gitRevision;
+    return { version: ttVersionOf(info), revision: typeof revision === 'string' ? revision.trim() : '', platform: ttPlatformOf(userAgent, touchPoints) };
+}
+
+// Revisions are compared on what both give, at least 7 characters (TT may report a short or a full hash).
+function sameRevision(a, b) {
+    const x = String(a ?? '').toLowerCase(), y = String(b ?? '').toLowerCase(), n = Math.min(x.length, y.length);
+    return n >= 7 && x.slice(0, n) === y.slice(0, n);
+}
+
+const describeBuild = build => `${TT_PLATFORM_NAMES[build.platform] ?? build.platform} ${build.version}（构建 ${build.revision.slice(0, 7)}，${build.date.slice(5)}）`;
+
+/**
+ * Whether this TT build was checked: { verified, label, note }. `label` is the short verdict, `note` says what was
+ * checked when it is not this build, so "已验证" is never shown for another platform or another build of the release.
+ */
+export function ttVerification(build) {
+    const number = /^(\d+\.\d+\.\d+)/.exec(String(build?.version ?? '').trim())?.[1];
+    const checked = TESTED_TT_BUILDS.map(describeBuild).join('、');
+    const note = `验证过的是${checked}`;
+    if (!number) return { verified: false, label: '版本未知', note };
+    const sameNumber = TESTED_TT_BUILDS.filter(b => b.version === number);
+    const exact = sameNumber.find(b => b.platform === build.platform && sameRevision(b.revision, build.revision));
+    if (exact) return { verified: true, label: '已验证', note: `${exact.date.slice(5)} 在这个构建上验证过` };
+    if (sameNumber.some(b => b.platform === build.platform)) return { verified: false, label: build.revision ? '未验证这个构建' : '构建未知', note };
+    if (sameNumber.length) return { verified: false, label: `未在${TT_PLATFORM_NAMES[build.platform] ?? '这个平台'}上验证`, note };
+    return { verified: false, label: '未验证此版本', note };
+}
+
+/** Whether the release number is among the checked ones, whatever the platform or build (see ttVerification). */
 export function isTestedTtVersion(version) {
     const number = /^(\d+\.\d+\.\d+)/.exec(String(version ?? '').trim())?.[1];
     return !!number && TESTED_TT_VERSIONS.includes(number);

@@ -26,10 +26,15 @@ export function createNativeWorldEditor(h) {
     return createWorldEditorAdapter({
         account: h.account, journal, uuid: h.uuid,
         enqueue: h.enqueue, makeLease: h.makeLease, assertLease, verifyAccount: h.verifyAccount,
-        async listBooks(lease) {
+        async listBooks(lease, { fresh = false } = {}) {
             // TT 酒馆 has no /api/worldinfo/list; its own page reads the names from the settings answer (as SillyTavern did
-            // before that request existed).
+            // before that request existed). That answer is the whole settings file (~170KB on a phone), so it is asked for
+            // only where a write depends on the names (`fresh`: just before saving, a new or copied book's name, after
+            // creating one). Other reads take the list TT's page keeps itself, which its own create, delete and rename
+            // update; a book's content is still read from its file each time.
             if (h.onTauriTavern) {
+                const own = wi.world_names;
+                if (!fresh && Array.isArray(own) && own.every(name => typeof name === 'string')) { assertLease(lease); return [...own]; }
                 const names = (await post('/api/settings/get', {}, lease))?.world_names;
                 if (!Array.isArray(names) || names.some(name => typeof name !== 'string')) throw worldError('WORLD_LIST_UNCONFIRMED', '世界书列表没加载全');
                 return [...names];

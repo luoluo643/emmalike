@@ -298,7 +298,7 @@ try {
     check('Reader菜单显示当前子线标识', (await dialog(run).innerText()).includes(`番外 · ${title}`));
     await closeDialog(run);
     await page.getByRole('button', { name: '切换故事', exact: true }).click();
-    await dialog('故事').getByRole('button', { name: new RegExp(`番外 · ${title}`) }).waitFor();
+    await dialog('故事').getByRole('button', { name: new RegExp(`^番外 · ${title}`) }).waitFor();
     check('章节切换列表按真实元数据显示子线标识', (await dialog('故事').innerText()).includes(`番外 · ${title}`));
     await dialog('故事').getByRole('button', { name: /^角色主页/ }).click();
     const chapter = page.locator('.tl-chapter-row').filter({ hasText: `番外 · ${title}` });

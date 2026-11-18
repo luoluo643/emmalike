@@ -22,8 +22,8 @@ import { storyKey } from '/story-state.js';
 const account='episode-ui-qa', avatar='fixture.png', root={account,avatar,file:'source'};
 const id=n=>'00000000-0000-4000-8000-'+String(n).padStart(12,'0');
 const meta=(n,title,extra={})=>({schemaVersion:1,ownerAccount:account,episodeId:id(n),rootId:id(1),parentId:id(1),kind:'side',title,contextMode:'continued',createdAt:'2026-01-01T00:00:00Z',creationOperationId:id(n+100),...extra});
-const nodes=[{locator:{account,avatar,file:'child-a'},episode:meta(2,'雨夜',{openingRequest:'去海边看灯塔'}),relationship:'resolved',rootLocator:root},
-{locator:{account,avatar,file:'child-b'},episode:meta(3,'雨夜',{openingRequest:'花园的约定'}),relationship:'resolved',rootLocator:root}];
+const nodes=[{locator:{account,avatar,file:'child-a'},episode:meta(2,'雨夜',{openingRequest:'去海边看灯塔'}),metadata:{tavern_lite_episode:meta(2,'雨夜')},relationship:'resolved',rootLocator:root},
+{locator:{account,avatar,file:'child-b'},episode:meta(3,'雨夜',{openingRequest:'花园的约定'}),metadata:{tavern_lite_episode:meta(3,'雨夜')},relationship:'resolved',rootLocator:root}];
 const graph={nodes,roots:[{locator:root}],ordinaryChats:[{locator:root},{locator:{account,avatar,file:'other'}}],invalid:[],complete:true,entries:[]};
 let status={enabled:true,verified:true,reasons:[],contextModes:['continued','fresh']}, operations=[], current=root;
 const calls=[];window.calls=calls;window.fixtureGraph=graph;
@@ -58,7 +58,8 @@ function App(){const [open,setOpen]=useState(false),[rename,setRename]=useState(
  window.harness={open:next=>{setIntent(next||null);setOpen(true)},rename:()=>{setOpen(false);setRename(true)},change,close:()=>setOpen(false)};
  return h('div',{class:'tl-app'},h('button',{onClick:()=>setOpen(true)},'番外入口'),h('textarea',{id:'draft',value:text,readOnly:true}),
   open&&h(EpisodesSheet,{account,scope:window.fixtureScope||root,characterName:'合成角色',currentTitle:'source',draft:text,draftRevision:revision.current,
-   initialIntent:intent,onClose:()=>setOpen(false),
+   initialIntent:intent,onClose:()=>setOpen(false),nameOf:file=>'名字'+file,renameDisabled:!!window.renameOff,
+   onRename:story=>calls.push(['rename-pick',story.file_name,story.chat_metadata?.tavern_lite_episode?.title||'']),
    onCopied:(_,next)=>change(next),onSent:capture=>{if(capture.revision===revision.current&&capture.text===value.current)change('')},notify:()=>{}}),
   rename&&h(EpisodeRenameSheet,{account,avatar,file:'child-a',episode:meta(2,'旧标题'),withBridge:(_,action)=>action(window.fixtureBridge),onClose:()=>setRename(false),onChanged:()=>calls.push(['renamed'])}));}
 render(h(App),document.getElementById('root'));
@@ -114,10 +115,21 @@ try {
     check('移出只动记录不发送', await count('dismiss') === 1 && await count('send') === 0);
     await page.evaluate(() => harness.close()); await page.evaluate(() => harness.open());
     await page.locator('.tl-episode-tree [data-depth="1"]').nth(1).waitFor();
-    check('正文在上、两条线挂在下面，各有打开按钮；只有两条时不显示搜索框', await page.locator('.tl-episode-tree .tl-episode-list-row').count() === 3
-        && (await page.locator('.tl-episode-tree .tl-episode-list-row').first().innerText()).startsWith('正文')
-        && await page.locator('.tl-episode-tree [data-depth="1"]').getByRole('button', { name: '打开', exact: true }).count() === 2
+    check('正文在上、两条线挂在下面，各有改名按钮；只有两条时不显示搜索框', await page.locator('.tl-episode-tree .tl-episode-list-row').count() === 3
+        && (await page.locator('.tl-episode-tree .tl-episode-list-row').first().innerText()).startsWith('正文 · 名字source')
+        && await page.locator('.tl-episode-tree [data-depth="1"]').getByRole('button', { name: /^给「番外 · 雨夜」改名$/ }).count() === 2
+        && await page.locator('.tl-episode-tree [data-depth="1"]').getByRole('button', { name: '打开', exact: true }).count() === 0
         && await page.getByLabel('搜索标题').count() === 0);
+    await page.locator('.tl-episode-tree [data-depth="1"]').nth(1).getByRole('button', { name: /改名/ }).click();
+    check('线的改名交出那条线的文件和标题，不打开它', await page.evaluate(() => JSON.stringify(calls.filter(x => x[0] === 'rename-pick' || x[0] === 'open')))
+        === JSON.stringify([['rename-pick', 'child-b', '雨夜']]));
+    await page.getByRole('button', { name: '给「source」改名', exact: true }).click();
+    check('「你在」旁的改名交出当前故事', await page.evaluate(() => JSON.stringify(calls.filter(x => x[0] === 'rename-pick').at(-1))) === JSON.stringify(['rename-pick', 'source', '']));
+    await page.evaluate(() => { window.renameOff = true; harness.close(); }); await page.evaluate(() => harness.open());
+    await page.locator('.tl-episode-tree [data-depth="1"]').nth(1).waitFor();
+    check('生成中改名按钮变灰', await page.locator('.tl-episodes-sheet button[aria-label$="改名"]').evaluateAll(list => list.length === 3 && list.every(b => b.disabled)));
+    await page.evaluate(() => { window.renameOff = false; harness.close(); }); await page.evaluate(() => harness.open());
+    await page.locator('.tl-episode-tree [data-depth="1"]').nth(1).waitFor();
     check('线的说明来自 metadata 的开场要求', await page.getByRole('button', { name: /番外 · 雨夜.*灯塔/ }).count() === 1 && await page.getByRole('button', { name: /番外 · 雨夜.*花园的约定/ }).count() === 1);
     check('标题来自metadata而不是文件名', await page.evaluate(() => fixture.label()) === '番外 · 真实标题');
     await button('＋ 新开番外 / 平行线 / 小剧场').click();

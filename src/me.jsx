@@ -7,16 +7,28 @@ import { PersonaSheet, personaThumb } from './persona.jsx';
 import { modelSummary } from './model.jsx';
 import { DisplaySheet } from './appearance.jsx';
 import { installApp, installState, reminderSupported, reminderEnabled, setReminder } from './attention.js';
-import { isTestedTtVersion } from './tt-host.js';
+import { TT_PLATFORM_NAMES, ttVerification } from './tt-host.js';
 
 const CAPABILITY_LABELS = {
     send: '发送消息', format: '旧消息排版', editText: '编辑消息', deleteMessage: '删除消息', swipe: '换回复', newChat: '开始新故事', groups: '群聊', branch: '换个走向', chapters: '故事起名和删除', cards: '前端卡片',
 };
 
+/** On TT: its release, platform and build, and whether that exact build was checked (otherwise which one was). */
+function TtAbout({ tt, version }) {
+    const verdict = tt ? ttVerification(tt) : null;
+    const build = tt ? [tt.version || '未知', TT_PLATFORM_NAMES[tt.platform], tt.revision && `构建 ${tt.revision.slice(0, 7)}`].filter(Boolean).join(' · ') : '…';
+    return (
+        <>
+            <p class="tl-muted">轻酒馆 {__APP_VERSION__} · TT 酒馆 {build}（原版 {version || '未知'}） · {verdict?.label ?? '…'}</p>
+            {verdict && !verdict.verified && <p class="tl-muted tl-tt-verified-note">{verdict.note}</p>}
+        </>
+    );
+}
+
 function About({ engineReady }) {
     const [serverVersion, setServerVersion] = useState('');
-    const [ttVersion, setTtVersion] = useState('');
-    useEffect(() => { api.getServerVersion().then(setServerVersion); api.getTtVersion().then(setTtVersion); }, []);
+    const [tt, setTt] = useState(null);
+    useEffect(() => { api.getServerVersion().then(setServerVersion); if (api.onTauriTavern) api.getTtBuild().then(setTt); }, []);
     const info = engineReady ? engine.engineInfo() : null;
     const version = info?.version ?? serverVersion;
     const tested = engine.isTestedVersion(version);
@@ -25,7 +37,7 @@ function About({ engineReady }) {
         <section class="tl-about">
             {api.onTauriTavern
                 // TT carries SillyTavern's frontend of some version and changes parts of it: its own release is what was checked.
-                ? <p class="tl-muted">轻酒馆 {__APP_VERSION__} · TT 酒馆 {ttVersion || '未知'}（原版 {version || '未知'}） · {ttVersion ? (isTestedTtVersion(ttVersion) ? '已验证' : '未验证此版本') : '版本未知'}</p>
+                ? <TtAbout tt={tt} version={version} />
                 : <p class="tl-muted">轻酒馆 {__APP_VERSION__} · 酒馆 {version || '未知'} · {version ? (tested ? '已验证' : '未验证此版本') : '版本未知'}</p>}
             {missing.length > 0 && <p class="tl-error">当前酒馆版本缺少：{missing.join('、')}，请在原版界面使用</p>}
         </section>

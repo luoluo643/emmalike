@@ -38,13 +38,14 @@ export function createWorldEditorAdapter(d) {
         return { snapshot, fingerprint };
     }
     const cached = name => { const value = d.cacheGet(name); return value ? { snapshot: cloneJson(value), fingerprint: worldFingerprint(value) } : null; };
-    async function named(name, lease) {
-        const names = await d.listBooks(lease); d.assertLease(lease);
+    // `fresh`: the names straight from the server, where a write depends on them (see listBooks on TT).
+    async function named(name, lease, fresh = false) {
+        const names = await d.listBooks(lease, { fresh }); d.assertLease(lease);
         if (!Array.isArray(names) || names.some(x => typeof x !== 'string')) fail('WORLD_LIST_UNCONFIRMED', '世界书列表没加载出来');
         return names.includes(name);
     }
-    async function actual(name, lease) {
-        if (!await named(name, lease)) { observeFingerprint(name, null); fail('WORLD_MISSING', '这本世界书改名或删掉了，草稿先留着，请重新看看'); }
+    async function actual(name, lease, fresh = false) {
+        if (!await named(name, lease, fresh)) { observeFingerprint(name, null); fail('WORLD_MISSING', '这本世界书改名或删掉了，草稿先留着，请重新看看'); }
         return read(name, lease);
     }
     function checkCacheBaseline(name, server) {
@@ -74,7 +75,7 @@ export function createWorldEditorAdapter(d) {
     async function reconcile(op, lease, observedEvents = 0, writeError) {
         assertAccount(op.account, lease);
         let observed;
-        try { observed = await actual(op.name, lease); }
+        try { observed = await actual(op.name, lease, op.action === 'copy' || op.action === 'book-create'); }
         catch (error) {
             d.assertLease(lease);
             const kind = classifySaveOutcome({ matchesExpected: false }), runtimeState = dirtyBooks.has(op.name) ? 'unconfirmed' : 'ready';
@@ -242,7 +243,7 @@ export function createWorldEditorAdapter(d) {
         }
     }
     async function submitOnce(op, lease, attempt) {
-        const latest = op.action === 'copy' || op.action === 'book-create' ? await named(op.name, lease) ? await read(op.name, lease) : null : await actual(op.name, lease);
+        const latest = op.action === 'copy' || op.action === 'book-create' ? await named(op.name, lease, true) ? await read(op.name, lease) : null : await actual(op.name, lease, true);
         if ((latest?.fingerprint ?? null) !== op.baseFingerprint) {
             const runtimeState = dirtyBooks.has(op.name) ? 'conflict' : 'ready';
             op = await journal.update(op, { stage: classifySaveOutcome({ notSubmitted: true }), outcomeVersion: 2, runtimeState, retryAllowed: true, writeSettled: 'not-started', error: '保存前世界书变了，这次没存，草稿还在，请重新看看' });
@@ -314,7 +315,7 @@ export function createWorldEditorAdapter(d) {
             if (input.operationId) return recover(input, lease);
             validateWorldName(input.newName);
             await assertNoPending(input.newName, lease);
-            const names = await d.listBooks(lease); d.assertLease(lease);
+            const names = await d.listBooks(lease, { fresh: true }); d.assertLease(lease);
             if (names.some(name => name.toLocaleLowerCase() === input.newName.toLocaleLowerCase())) fail('WORLD_NAME_EXISTS', '已有同名世界书，换个名字');
             const source = await actual(input.name, lease);
             if (input.expectedFingerprint && source.fingerprint !== input.expectedFingerprint) fail('WORLD_CHANGED', '原书变了，刷新后再复制');
@@ -346,7 +347,7 @@ export function createWorldEditorAdapter(d) {
             if (input.operationId) return recover(input, lease);
             validateWorldName(input.name);
             await assertNoPending(input.name, lease);
-            const names = await d.listBooks(lease); d.assertLease(lease);
+            const names = await d.listBooks(lease, { fresh: true }); d.assertLease(lease);
             if (names.some(name => name.toLocaleLowerCase() === input.name.toLocaleLowerCase())) fail('WORLD_NAME_EXISTS', '已有同名世界书，换个名字');
             const expected = { entries: {} };
             const operation = await journal.create({ account: d.account, operationId: d.uuid(), name: input.name, action: 'book-create',

@@ -22,6 +22,10 @@
     .tl-episode-list-row { display: flex; align-items: center; gap: 8px; }
     .tl-episode-list-row > .tl-sheet-item { min-width: 0; flex: 1; }
     .tl-episode-list-row > .tl-button { flex: none; }
+    /* A story in the 故事 list with its 改名 beside it: the row, not the item, draws the line between stories. */
+    .tl-story-row { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--tl-border); padding-inline-end: 16px; }
+    .tl-story-row > .tl-sheet-item { min-width: 0; flex: 1; border-top: 0; }
+    .tl-story-row > .tl-button, .tl-episode-here > .tl-button { flex: none; }
     .tl-episode-form label { display: grid; gap: 8px; margin: 12px 0; }
     /* A line's form is the whole body of its sheet: the sheet's own side margin, as its other contents have. */
     .tl-sheet-body > .tl-episode-form { padding-inline: 16px; }

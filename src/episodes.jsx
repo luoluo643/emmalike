@@ -29,7 +29,8 @@ export function EpisodeTag({ metadata, account }) {
     return <span class="tl-tag tl-episode-tag" data-kind={identity.kind}>{identity.type}</span>;
 }
 
-export function EpisodeRenameSheet({ account, avatar, file, episode, withBridge, onClose, onChanged }) {
+/** `onFileName` adds a way to the file name the full app shows instead (the title stays). */
+export function EpisodeRenameSheet({ account, avatar, file, episode, withBridge, onClose, onChanged, onFileName }) {
     const [title, setTitle] = useState(episode.title), [kind, setKind] = useState(episode.kind);
     const [busy, setBusy] = useState(false), [uncertain, setUncertain] = useState(false), [error, setError] = useState('');
     const lock = useRef(false), alive = useRef(true);
@@ -56,6 +57,11 @@ export function EpisodeRenameSheet({ account, avatar, file, episode, withBridge,
             {error && <p class="tl-error" role="alert">{error}</p>}
             <button class="tl-button tl-primary" disabled={busy || !title.trim() || !uncertain && title === episode.title && kind === episode.kind} aria-busy={busy ? 'true' : undefined} onClick={save}>
                 {busy ? <><Spinner />正在检查…</> : uncertain ? '检查一下' : '保存标题'}</button>
+            {onFileName && <details class="tl-more-fields">
+                <summary>更多</summary>
+                <button class="tl-button" disabled={busy} onClick={onFileName}>改原版界面里显示的文件名</button>
+                <p class="tl-muted">标题不变</p>
+            </details>}
         </div>
     </Sheet>;
 }
@@ -124,7 +130,7 @@ export function writeEpisodeForm(account, scope, form) {
  * confirmed send clears the input, if it still holds that text (`onSent`).
  */
 export function EpisodesSheet({ account, scope, characterName, currentTitle, draft, draftRevision,
-    initialIntent, currentRequest, onClose, onSent, onCopied, onBusyChange, onJump, onSendHere, notify }) {
+    initialIntent, currentRequest, onClose, onSent, onCopied, onBusyChange, onJump, onSendHere, notify, onRename, renameDisabled, nameOf }) {
     const bridge = engine.getBridge();
     const mounted = useRef(true), lock = useRef(false), job = useRef(null);
     const [saved] = useState(() => readEpisodeForm(account, scope));
@@ -324,6 +330,15 @@ export function EpisodesSheet({ account, scope, characterName, currentTitle, dra
         .filter((node, index, all) => all.findIndex(other => sameFile(node.locator, other.locator)) === index && node.locator.account === account);
     const here = current?.episode ? labelFor(current) : currentTitle || '这个故事';
     const rootReady = isChild && current.relationship === 'resolved' && !!current.rootLocator;
+    // The 正文's own name ("第 5 个故事"), when the page can say it.
+    const rootFile = isChild ? current.rootLocator?.file : scope.file;
+    const rootName = rootFile && nameOf ? nameOf(rootFile) : '';
+    // Renaming hands a story (as the story list has it) to the page: a line's title, any other story's file name.
+    const storyOf = locator => {
+        const node = [...(graph?.nodes || []), ...(graph?.roots || []), ...(graph?.ordinaryChats || [])].find(x => sameFile(x.locator, locator));
+        return { file_name: chatId(locator.file), chat_metadata: node?.metadata ?? {} };
+    };
+    const canRename = !!onRename && !busy && !!graph && !renameDisabled;
     // Where a line leaves the 正文 (the message it copied up to, or the part split out).
     const forkPlace = node => {
         const e = node.episode, at = e?.sourceAnchor?.anchor?.index;
@@ -351,6 +366,7 @@ export function EpisodesSheet({ account, scope, characterName, currentTitle, dra
         {(mode === 'list' || error || busy && !sending) && <div class="tl-episode-heading">
             {mode === 'list' && <div class="tl-episode-here">
                 <p>你在：<strong>{here}</strong></p>
+                {onRename && scope.file && <button class="tl-button" disabled={!canRename} aria-label={`给「${here}」改名`} onClick={() => onRename(storyOf(scope))}>改名</button>}
             </div>}
             {mode === 'list' && isChild && current.relationship !== 'resolved' && <p class="tl-muted">{current.relationship === 'ambiguous' ? '有重复的记录' : '原故事找不到或还没确认'}，不会跳到名字相似的故事。</p>}
             {error && <p class="tl-error" role="alert">{error}</p>}
@@ -375,7 +391,7 @@ export function EpisodesSheet({ account, scope, characterName, currentTitle, dra
                     {graph && !graph.complete && <p class="tl-muted">有些故事还没读到，列表可能不全</p>}
                     {candidates.length > 5 && <input class="tl-input" type="search" aria-label="搜索标题" placeholder="搜索标题" value={query} onInput={e => setQuery(e.currentTarget.value)} />}
                     <div class="tl-episode-list-row" data-depth="0">
-                        <SheetItem label="正文" hint={isChild ? '这些线是从它分出来的' : here} current={!isChild} disabled={busy || !isChild || !rootReady}
+                        <SheetItem label={rootName ? `正文 · ${rootName}` : '正文'} hint={isChild ? '这些线是从它分出来的' : rootName ? '' : here} current={!isChild} disabled={busy || !isChild || !rootReady}
                             onClick={() => open(current.rootLocator)} />
                         {isChild && <button class="tl-button" disabled={busy || !rootReady} onClick={() => open(current.rootLocator)}>回正文</button>}
                     </div>
@@ -385,7 +401,8 @@ export function EpisodesSheet({ account, scope, characterName, currentTitle, dra
                             <SheetItem label={labelFor(node)} current={reading} disabled={busy || reading}
                                 hint={[forkPlace(node), node.episode.openingRequest?.slice(0, 60)].filter(Boolean).join(' · ')}
                                 onClick={() => open(node.locator)} />
-                            {!reading && <button class="tl-button" disabled={busy} onClick={() => open(node.locator)}>打开</button>}
+                            {/* A tap on the row opens it; the button beside it renames, so a long title keeps its room. */}
+                            {onRename && <button class="tl-button" disabled={!canRename} aria-label={`给「${labelFor(node)}」改名`} onClick={() => onRename(storyOf(node.locator))}>改名</button>}
                         </div>;
                     })}
                     {graph && !candidates.length && <p class="tl-muted">还没有番外或平行线</p>}

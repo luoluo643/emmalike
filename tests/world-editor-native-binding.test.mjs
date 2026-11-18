@@ -5,13 +5,14 @@ import { createNativeWorldEditor } from '../bridge-world-editor-native.js';
 import { cloneJson } from '../src/episode-model.js';
 import { isBlockingWorldOperation } from '../src/world-editor-model.js';
 function fixture(opts = {}) {
+ const ownNames = opts.ownNames;
  const original={entries:{0:{uid:0,content:'old',key:[]}}}, disk=cloneJson(original), cache=new Map([['Book',cloneJson(original)]]), operations=new Map(), listeners=new Set();
  let calls=0,queue=Promise.resolve(),active=true,waitIdle=async()=>{},nativeReject=false;
  const lease={account:'alice'}, assertLease=()=>{if(!active)throw Object.assign(new Error('changed'),{code:'ACCOUNT_CHANGED'});};
  const journal={async create(x){const o={...cloneJson(x),revision:1,stage:'prepared'};operations.set(o.operationId,o);return cloneJson(o);},async update(o,p){const v={...operations.get(o.operationId),...p,revision:o.revision+1};operations.set(o.operationId,v);return cloneJson(v);},async read(a,id){return cloneJson(operations.get(id));},async unfinished(){return [...operations.values()].filter(isBlockingWorldOperation);}};
  const eventSource={on(t,f){listeners.add(f);},removeListener(t,f){listeners.delete(f);},async emit(t,...args){for(const f of listeners)await f(...args);}};
  const h={account:'alice',journal,uuid:randomUUID,st:{getRequestHeaders:()=>({})},powerUser:{},ctx:()=>({eventSource,eventTypes:{WORLDINFO_UPDATED:'updated'}}),
-  worldInfo:{worldInfoCache:cache,async saveWorldInfo(name,data){calls++;cache.set(name,cloneJson(data));if(nativeReject)throw new Error('native reject after cache');Object.assign(disk,cloneJson(data));await eventSource.emit('updated',name,data);},reloadEditor:async()=>{},updateWorldInfoList:async()=>{}},
+  worldInfo:{worldInfoCache:cache,...(ownNames?{world_names:ownNames}:{}),async saveWorldInfo(name,data){calls++;cache.set(name,cloneJson(data));if(nativeReject)throw new Error('native reject after cache');Object.assign(disk,cloneJson(data));await eventSource.emit('updated',name,data);},reloadEditor:async()=>{},updateWorldInfoList:async()=>{}},
   enqueue(f){const run=queue.then(f);queue=run.catch(()=>{});return run;},makeLease:()=>lease,assertLease,assertQueueOwner:assertLease,verifyAccount:async()=>assertLease(),waitIdle:()=>waitIdle(),
   onTauriTavern:!!opts.tt, paths:[],
   fetchImpl:async path=>{h.paths.push(path);if(opts.tt&&path==='/api/worldinfo/list')return {ok:false,status:404,json:async()=>({error:'Unsupported endpoint: /api/worldinfo/list'})};return {ok:true,json:async()=>path==='/api/worldinfo/list'?[{file_id:'Book'}]:path==='/api/settings/get'?{world_names:['Book']}:cloneJson(disk)};}};
@@ -42,4 +43,23 @@ test('TT: the book list is read from the settings answer and a save goes through
  assert.equal(r.kind === 'not-submitted' || r.kind === 'unconfirmed', false, JSON.stringify(r.kind));
  assert.equal(f.h.paths.includes('/api/worldinfo/list'), false);
  assert.equal(f.h.paths.includes('/api/settings/get'), true);
+});
+
+// The settings answer is the whole settings file: on TT it is read only where a write depends on the names.
+test('TT: opening a book uses the page\'s own list; a save asks the server once, just before writing', async () => {
+ const f = fixture({ tt: true, ownNames: ['Book'] });
+ await f.api.worldEditorBook('Book');
+ assert.equal(f.h.paths.filter(p => p === '/api/settings/get').length, 0, 'open: ' + f.h.paths.join());
+ f.h.paths.length = 0;
+ const r = await f.api.saveWorldEditorEntry(f.input);
+ assert.equal(r.kind, 'confirmed', r.kind);
+ assert.equal(f.h.paths.filter(p => p === '/api/settings/get').length, 1, 'save: ' + f.h.paths.join());
+});
+test('TT: a book renamed away on the server is still caught before writing', async () => {
+ const f = fixture({ tt: true, ownNames: ['Book'] });
+ const old = f.h.fetchImpl;
+ f.h.fetchImpl = async (path, init) => path === '/api/settings/get' ? { ok: true, json: async () => ({ world_names: ['Other'] }) } : old(path, init);
+ const r = await f.api.saveWorldEditorEntry(f.input).catch(e => e);
+ assert.equal(f.calls(), 0, 'no native write');
+ assert.match(String(r?.code ?? r?.kind), /WORLD_MISSING|not-submitted/);
 });

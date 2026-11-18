@@ -25,7 +25,7 @@ import { ToolsSheet } from './tools.jsx';
 import { NativePopupSheet, Spinner, friendlyError, go, goBack, parseHash, routeHash, shellBack, storage, trackProgress, useBackLayer, useEngine, useProgress, wasLayerPop } from './ui.jsx';
 import { WorkPage } from './work.jsx';
 import { fitIphoneHomeScreen } from './ios-standalone.js';
-import { installTtRequests, isTestedTtVersion } from './tt-host.js';
+import { TT_PLATFORM_NAMES, installTtRequests, ttVerification } from './tt-host.js';
 
 installTtRequests(window);
 
@@ -325,11 +325,14 @@ function App() {
                 // The account's picture is read from its persona, so the header shows the new one after a re-read.
                 giveLetterPicture(userRef.current?.name).then(() => api.getCurrentUser()).then(u => u && setUser(u)).catch(() => { });
             }
-            if (api.onTauriTavern) api.getTtVersion().then(version => {
-                const key = `tavern-lite:untested-tt-warned:${version}`;
-                if (!version || isTestedTtVersion(version) || storage(s => s.getItem(key))) return;
+            // Told once per build: another platform or another build of a checked release is not called checked.
+            if (api.onTauriTavern) api.getTtBuild().then(build => {
+                const verdict = ttVerification(build);
+                const key = `tavern-lite:untested-tt-warned:${build.version}:${build.platform}:${build.revision}`;
+                if (!build.version || verdict.verified || storage(s => s.getItem(key))) return;
                 storage(s => s.setItem(key, '1'));
-                notify(`TT 酒馆 ${version} 还没在轻酒馆验证过，遇到问题可以用原版界面`, 'warning');
+                const where = [TT_PLATFORM_NAMES[build.platform], build.revision && `构建 ${build.revision.slice(0, 7)}`].filter(Boolean).join('，');
+                notify(`TT 酒馆 ${build.version}${where ? `（${where}）` : ''}${verdict.label}，${verdict.note}。遇到问题可以用原版界面`, 'warning');
             });
             const info = engine.engineInfo();
             const warnedKey = `tavern-lite:untested-warned:${info?.version}`;

@@ -1,5 +1,5 @@
 import { rememberShellRead, withKeptChat } from './chat-sync.js';
-import { missingChatAnswer, ttHostWindow, ttUser, ttVersionOf, unsupportedEndpoint } from './tt-host.js';
+import { missingChatAnswer, ttBuildOf, ttHostWindow, ttUser, ttVersionOf, unsupportedEndpoint } from './tt-host.js';
 
 /** Whether the shell is laid over TT 酒馆's page (src/tt-host.js): one local user, no accounts, no login. */
 export const onTauriTavern = !!ttHostWindow(typeof window === 'undefined' ? undefined : window);
@@ -194,6 +194,18 @@ export async function getTtVersion() {
         return ttVersionOf(await request('/version', { method: 'GET' }));
     } catch {
         return '';
+    }
+}
+
+/** The TT build running: { version, revision, platform } (all '' elsewhere or when /version cannot be read). */
+export async function getTtBuild() {
+    const empty = { version: '', revision: '', platform: '' };
+    if (!onTauriTavern) return empty;
+    try {
+        const nav = ttHostWindow()?.navigator ?? navigator;
+        return ttBuildOf(await request('/version', { method: 'GET' }), nav.userAgent, nav.maxTouchPoints);
+    } catch {
+        return empty;
     }
 }
 

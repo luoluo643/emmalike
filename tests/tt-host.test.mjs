@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clipToRects, clipWithHoles, disjointRects, installTtRequests, isTauriTavern, isTestedTtVersion, missingChatAnswer, ttHostWindow, ttSillyTavernVersion, ttUser, ttVersionOf, unsupportedEndpoint, TT_ACCOUNT, TT_SHELL_MARK } from '../src/tt-host.js';
+import { clipToRects, clipWithHoles, disjointRects, installTtRequests, isTauriTavern, isTestedTtVersion, ttBuildOf, ttPlatformOf, ttVerification, TESTED_TT_BUILDS, missingChatAnswer, ttHostWindow, ttSillyTavernVersion, ttUser, ttVersionOf, unsupportedEndpoint, TT_ACCOUNT, TT_SHELL_MARK } from '../src/tt-host.js';
 
 function shellIn(host, mark = TT_SHELL_MARK) {
     return { parent: host, frameElement: { dataset: { tavernLite: mark } }, location: { href: 'http://tauri.localhost/scripts/extensions/third-party/x/app/index.html', origin: 'http://tauri.localhost' }, URL };
@@ -95,4 +95,33 @@ test('holes that overlap are cut out as one area: every point of any rectangle i
     assert.equal(disjointRects(cases.same, W, H).length, 1);
     assert.deepEqual(disjointRects([], W, H), []);
     assert.equal(clipWithHoles(cases.same, 100, 100, 0), "path(evenodd, 'M0 0H100V100H0zM30 30h40v40h-40z')");
+});
+
+test('TT platform from the page: Android, iPhone, iPad asking for desktop pages, desktops', () => {
+    assert.equal(ttPlatformOf('Mozilla/5.0 (Linux; Android 15; sdk_gphone64_x86_64 Build/AE3A; wv) AppleWebKit/537.36'), 'android');
+    assert.equal(ttPlatformOf('Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148'), 'ios');
+    assert.equal(ttPlatformOf('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15', 5), 'ios');
+    assert.equal(ttPlatformOf('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15', 0), 'macos');
+    assert.equal(ttPlatformOf('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edg/130.0'), 'windows');
+    assert.equal(ttPlatformOf('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15'), 'linux');
+    assert.equal(ttPlatformOf(''), '');
+});
+
+test('TT verified only for the checked platform and build; anything else says what was checked', () => {
+    const [b] = TESTED_TT_BUILDS;
+    const android = 'Mozilla/5.0 (Linux; Android 15; wv)';
+    const build = (info, ua = android, touch = 0) => ttBuildOf(info, ua, touch);
+    assert.deepEqual(build({ tauriVersion: b.version, gitRevision: b.revision }), { version: b.version, revision: b.revision, platform: 'android' });
+    assert.equal(ttVerification(build({ tauriVersion: b.version, gitRevision: b.revision })).verified, true);
+    assert.equal(ttVerification(build({ tauriVersion: b.version, gitRevision: b.revision.slice(0, 7) })).verified, true, 'short hash');
+    assert.equal(ttVerification(build({ tauriVersion: b.version, gitRevision: b.revision + 'ab12cd34ef56ab12cd34ef56ab12' })).verified, true, 'full hash');
+    const other = ttVerification(build({ tauriVersion: b.version, gitRevision: '0123456789ab' }));
+    assert.equal(other.verified, false); assert.equal(other.label, '未验证这个构建'); assert.match(other.note, /安卓 2\.4\.0（构建 fff9af0/);
+    assert.equal(ttVerification(build({ tauriVersion: b.version })).label, '构建未知');
+    assert.equal(ttVerification(build({ tauriVersion: b.version, gitRevision: 'abc' })).verified, false, 'too short to tell');
+    const ios = ttVerification(build({ tauriVersion: b.version, gitRevision: b.revision }, 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X)'));
+    assert.equal(ios.verified, false); assert.equal(ios.label, '未在iOS上验证');
+    assert.equal(ttVerification(build({ tauriVersion: b.version, gitRevision: b.revision }, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).label, '未在Windows上验证');
+    assert.equal(ttVerification(build({ tauriVersion: '2.5.0', gitRevision: b.revision })).label, '未验证此版本');
+    assert.equal(ttVerification(build({})).label, '版本未知');
 });

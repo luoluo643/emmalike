@@ -84,13 +84,15 @@ export function ChapterActions({ character, chapter, chapters = [], numbers, acc
     const [step, setStep] = useState(start);
     const file = api.chatId(chapter.file_name);
     const identity = episodeIdentity(chapter.chat_metadata, account);
+    // A 番外/平行线/小剧场 has a title besides its file name; a 正文's name is its file name.
+    const line = !!identity.episode && identity.kind !== 'root';
     const label = storyIdentityLabel(chapter, character.name, numbers, account);
     // An automatic name is only a date, so the box starts empty instead of pre-filled with it.
     const named = !hasGivenName(file, character.name);
     const taken = chapters.map(c => c.file_name).filter(name => api.chatId(name) !== file);
 
     if (step === 'title') return <EpisodeRenameSheet account={account} avatar={character.avatar} file={file} episode={identity.episode}
-        withBridge={withBridge} onClose={onClose} onChanged={onChanged} />;
+        withBridge={withBridge} onClose={onClose} onChanged={onChanged} onFileName={() => setStep('rename')} />;
 
     // With the full app ready the sheet stays open, its button saying "正在…", until the change is done (a failure is
     // shown and the sheet stays for a retry). Still loading: it closes and the change runs once ready, saying so.
@@ -101,7 +103,7 @@ export function ChapterActions({ character, chapter, chapters = [], numbers, acc
     };
     if (step === 'rename') {
         return (
-            <PromptSheet title={identity.episode ? '改文件名' : '给故事起名'} label={identity.episode ? '原版界面里显示的名字（标题不变）' : '新的名字'} initial={named ? file : ''} placeholder="例如：初遇、雨夜的约定" confirmLabel="保存"
+            <PromptSheet title={line ? '改文件名' : '给故事起名'} label={line ? '原版界面里显示的名字（标题不变）' : '新的名字'} initial={named ? file : ''} placeholder="例如：初遇、雨夜的约定" confirmLabel="保存"
                 busyLabel="正在保存…" validate={name => name.trim() === file ? '名字没变' : validateChapterName(name, taken)}
                 onClose={onClose}
                 onConfirm={name => change('给故事起名', b => b.renameChapter(character.avatar, file, name), { type: 'rename', file })} />
@@ -117,8 +119,8 @@ export function ChapterActions({ character, chapter, chapters = [], numbers, acc
     return (
         <Sheet title={label} onClose={onClose}>
             {onOpen && <SheetItem label="打开" onClick={() => { onClose(); onOpen(file); }} />}
-            {identity.episode && identity.kind !== 'root' && <SheetItem label="改标题" hint="可改标题和类型" onClick={() => setStep('title')} />}
-            <SheetItem label={identity.episode ? '改文件名' : '起名'} hint={identity.episode ? '原版界面里显示的名字，标题不变' : ''} onClick={() => setStep('rename')} />
+            {line && <SheetItem label="改标题" hint="可改标题和类型" onClick={() => setStep('title')} />}
+            <SheetItem label={line ? '改文件名' : '起名'} hint={line ? '原版界面里显示的名字，标题不变' : ''} onClick={() => setStep('rename')} />
             <SheetItem label="删除" hint="无法恢复" danger onClick={() => setStep('delete')} />
         </Sheet>
     );
@@ -138,8 +140,20 @@ export function ChapterRow({ character, chapter, numbers, account, current, onOp
     );
 }
 
-/** Chapter switcher opened from the reader's title. */
-export function ChaptersSheet({ character, account, currentFile, onOpen, onNew, onManage, onClose }) {
+/**
+ * Where renaming a story starts: a 番外/平行线/小剧场 changes its title (the name shown here), any other story, the
+ * 正文 among them, its file name.
+ */
+export const renameStep = (chapter, account) => {
+    const identity = episodeIdentity(chapter?.chat_metadata, account);
+    return identity.episode && identity.kind !== 'root' ? 'title' : 'rename';
+};
+
+/**
+ * Chapter switcher opened from the reader's title. `onRename` (with the chapter and the list it was picked from) puts
+ * a 改名 button on each row; `renameDisabled` greys them out while a reply is being written.
+ */
+export function ChaptersSheet({ character, account, currentFile, onOpen, onNew, onManage, onRename, renameDisabled, onClose }) {
     const { chapters: all, numbers, error } = useChapters(character.avatar, character.name);
     const [query, setQuery] = useState('');
     const { list: chapters, searching } = useChapterSearch(character, all, query, numbers);
@@ -151,9 +165,16 @@ export function ChaptersSheet({ character, account, currentFile, onOpen, onNew, 
             {chapters === null && !error && <Loading sheet />}
             {chapters?.map(chapter => {
                 const file = api.chatId(chapter.file_name);
+                const label = storyIdentityLabel(chapter, character.name, numbers, account);
+                const item = <SheetItem label={label} hint={[chapterMeta(chapter), plainSnippet(chapter.mes).slice(0, 40)].filter(Boolean).join(' · ')} current={file === currentFile}
+                    onClick={() => { onClose(); if (file !== currentFile) onOpen(file); }} />;
+                if (!onRename) return item;
                 return (
-                    <SheetItem label={storyIdentityLabel(chapter, character.name, numbers, account)} hint={[chapterMeta(chapter), plainSnippet(chapter.mes).slice(0, 40)].filter(Boolean).join(' · ')} current={file === currentFile}
-                        onClick={() => { onClose(); if (file !== currentFile) onOpen(file); }} />
+                    <div class="tl-story-row" key={file}>
+                        {item}
+                        <button class="tl-button" aria-label={`给「${label}」改名`} disabled={renameDisabled} title={renameDisabled ? '生成完再改名' : undefined}
+                            onClick={() => onRename(chapter, all ?? [])}>改名</button>
+                    </div>
                 );
             })}
             <SheetItem label="角色主页" hint="简介、管理故事" onClick={() => { onClose(); onManage(); }} />

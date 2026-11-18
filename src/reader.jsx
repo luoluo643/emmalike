@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import * as api from './api.js';
 import * as engine from './engine.js';
 import { mountCards, mirrorPanels } from './cards.js';
-import { ChapterActions, ChaptersSheet, useChapters } from './chapters.jsx';
+import { ChapterActions, ChaptersSheet, renameStep, useChapters } from './chapters.jsx';
 import { Icon } from './icons.jsx';
 import { previewHtml } from './render.js';
 import { ConfirmSheet, EngineStatus, Sheet, SheetItem, Spinner, chapterLabel, copyText, go, relativeTime, routeHash, useLongPress, friendlyError, Loading } from './ui.jsx';
@@ -1121,9 +1121,9 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                         onClick={() => setSheet({ type: 'export', from: 0 })} />
                     <SheetItem label="开始新故事" hint="从头开始，这个故事会保留" onClick={startNewChapter} />
                     {/* A new story has no file until its first save, so nothing to rename or delete yet. */}
-                    {currentChapter && !identity.episode && (
-                        <SheetItem label="给这个故事起名" hint={eng.generating ? '生成完再操作' : ''} disabled={eng.generating}
-                            onClick={() => setSheet({ type: 'story-actions', start: 'rename' })} />
+                    {currentChapter && (
+                        <SheetItem label={renameStep(currentChapter, user.handle) === 'title' ? '改标题' : '给这个故事起名'} hint={eng.generating ? '生成完再操作' : ''} disabled={eng.generating}
+                            onClick={() => setSheet({ type: 'story-actions', start: renameStep(currentChapter, user.handle) })} />
                     )}
                     {currentChapter && (
                         <SheetItem label="删除这个故事" hint={eng.generating ? '生成完再操作' : '无法恢复'} danger disabled={eng.generating}
@@ -1158,12 +1158,17 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                         onClick={() => { setSheet(null); if (eng.state === 'ready') onNative(); else { notify('原版界面还在准备，好了自动打开', 'info'); engine.whenBridge().then(() => onNative(), failed); } }} />
                 </Sheet>
             )}
-            {sheet?.type === 'story-actions' && currentChapter && character && (
+            {sheet?.type === 'story-actions' && (sheet.chapter || currentChapter) && character && (
+                // `chapter` is a story picked in the 故事 list or the 番外与平行线 sheet (`back` returns there), else the one open.
                 // Afterwards the app has the renamed story open, or after a delete the most recent remaining one (or a new one).
-                <ChapterActions start={sheet.start} character={character} chapter={currentChapter} chapters={storyList ?? []} numbers={numbers}
-                    account={user.handle} withBridge={withBridge} onClose={() => setSheet(null)}
-                    onChanged={({ type, current }) => {
-                        notify(type === 'delete' ? '故事已删除' : '故事已改名', 'info');
+                <ChapterActions start={sheet.start} character={character} chapter={sheet.chapter || currentChapter} chapters={sheet.chapters ?? storyList ?? []} numbers={numbers}
+                    account={user.handle} withBridge={withBridge} onClose={() => setSheet(sheet.back ? { type: sheet.back } : null)}
+                    onChanged={({ type, file, current }) => {
+                        notify(type === 'delete' ? '故事已删除' : type === 'title' ? '标题已改好' : '故事已改名', 'info');
+                        reloadNumbers();
+                        // A title lives in the file: the open story stays as it is. Another story renamed: back to the list.
+                        if (type === 'title' || type === 'rename' && file !== chatFile) { setSheet(sheet.back ? { type: sheet.back } : null); return; }
+                        setSheet(null);
                         if (current?.avatar) openChat(current);
                         else go({ name: 'work', avatar: route.avatar });
                     }} />
@@ -1213,7 +1218,8 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
             {sheet?.type === 'chapters' && character && (
                 <ChaptersSheet character={character} account={user.handle} currentFile={chatFile} onClose={() => setSheet(null)}
                     onOpen={file => go({ name: 'chat', avatar: route.avatar, file })} onNew={startNewChapter}
-                    onManage={() => go({ name: 'work', avatar: route.avatar })} />
+                    onManage={() => go({ name: 'work', avatar: route.avatar })} renameDisabled={eng.generating}
+                    onRename={(chapter, list) => setSheet({ type: 'story-actions', start: renameStep(chapter, user.handle), chapter, chapters: list, back: 'chapters' })} />
             )}
             {sheet?.type === 'message' && (
                 <Sheet title="消息操作" busy={!!sheetBusy && !sheetWaiting} onClose={closeSheet}>
@@ -1314,6 +1320,8 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
                 currentTitle={lineLabel} draft={draft} draftRevision={draftRevision.current} initialIntent={sheet.intent}
                 currentRequest={[...all].reverse().find(message => message.is_user && !message.is_system)?.mes || ''}
                 onBusyChange={setEpisodeBusy} notify={notify} onJump={showMessage}
+                nameOf={file => chapterLabel(file, character?.name, numbers)}
+                renameDisabled={eng.generating} onRename={chapter => setSheet({ type: 'story-actions', start: renameStep(chapter, user.handle), chapter, back: 'episodes' })}
                 // A line made or renamed here shows as a mark in the 正文 at once: the story list is read again.
                 onClose={() => { setSheet(null); reloadNumbers(); }}
                 onSendHere={text => { setSheet(null); send({ here: true, text }); }}
