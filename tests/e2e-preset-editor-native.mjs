@@ -136,7 +136,7 @@ try {
     await invoke('presetEditorSelect', { account, name: copy, target: original });
     phase = 'unknown-copy'; fault = 'unknown'; const unknown = await save({ copyName: pendingCopy });
     check('副本已落盘但读回不可用停为未知', unknown.result?.kind === 'unconfirmed' && (await catalog()).presets.has(pendingCopy)); const beforeRepeat = writes;
-    const repeat = await save({ copyName: pendingCopy }); check('未知保存只阻断同目标重复提交且没有新HTTP写入', repeat.error?.code === 'PRESET_SAVE_PENDING' && writes === beforeRepeat);
+    const repeat = await save({ copyName: pendingCopy }); check('再另存成同一个副本名不会重复写入', !!repeat.error && writes === beforeRepeat, repeat.error);
     fault = ''; const recovered = await invoke('presetEditorRecover', input({ operationId: unknown.result.operation.id }));
     check('查验只读取已有副本，不重写也不自动切换', recovered.result?.kind === 'saved-not-applied' && writes === beforeRepeat && recovered.result.actualCurrent === original);
     const use = await invoke('presetEditorUseCopy', input({ operationId: unknown.result.operation.id })); check('明确使用已有副本完整核验且不再写入', use.result?.applied && use.result.actualCurrent === pendingCopy && writes === beforeRepeat);

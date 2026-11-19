@@ -132,40 +132,29 @@ try {
     await page.reload(); await search().waitFor();
     check('预检失败刷新没有假未决且当前运行配置保留', await page.locator('[data-preset-operation]').count() === 0 && await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled() && await page.evaluate(() => fixture.current().full.temperature === 1.1));
     await openMain(); check('未提交后刷新保留逐字未应用草稿', await text().inputValue() === 'F1_F2_UNAPPLIED_DRAFT'); await back(true);
+    // A save whose answer was lost never holds the next one back: the button stays usable and saving again overwrites.
     await page.evaluate(() => fixture.fault('abort')); await page.getByRole('button', { name: '保存到此预设', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: '还不知道存没存上' }).waitFor();
-    check('派发abort加OLD界面未知只锁同名，另存及聊天仍可用', await page.getByRole('button', { name: '保存到此预设', exact: true }).isDisabled() && await page.getByRole('button', { name: '另存并使用', exact: true }).isEnabled() && await page.evaluate(() => basicChatProbe() === 'available' && fixture.counters().writes === 1));
-    await page.screenshot({ path: path.join(output, 'preset-unknown-copy-exit.png'), fullPage: true });
-    await page.evaluate(() => fixture.fault('')); await page.getByLabel('切换使用的预设').selectOption('Other');
-    await page.getByRole('dialog', { name: '确认切换预设' }).getByRole('button', { name: '确认切换', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: '现在用的是「Other」' }).waitFor();
-    check('切A到B不会把组件pending带成B的保存锁', await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled());
-    await page.evaluate(() => fixture.externalRuntime({ temperature: .5 })); await page.getByRole('button', { name: '保存到此预设', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '可能没存上' }).waitFor();
+    check('没回音的保存不锁按钮，另存与聊天照常', await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled() && await page.getByRole('button', { name: '另存并使用', exact: true }).isEnabled()
+        && await page.locator('[data-preset-operation]').count() === 0 && await page.evaluate(() => basicChatProbe() === 'available' && fixture.counters().writes === 1));
+    await page.screenshot({ path: path.join(output, 'preset-unknown-still-saves.png'), fullPage: true });
+    await page.evaluate(() => fixture.fault('')); await page.getByRole('button', { name: '保存到此预设', exact: true }).click();
     await page.getByRole('status').filter({ hasText: '已存进预设；之后' }).waitFor();
-    check('A未知时B真正保存成功', await page.evaluate(() => fixture.files.get('Other').temperature === .5 && fixture.counters().writes === 2));
-    await page.getByLabel('切换使用的预设').selectOption('Original'); await page.getByRole('status').filter({ hasText: '现在用的是「Original」' }).waitFor();
+    check('同名再存直接覆盖', await page.evaluate(() => fixture.files.get('Original').temperature === 1.1 && fixture.counters().writes === 2));
     await page.evaluate(() => { fixture.externalRuntime({ temperature: 1.3 }); fixture.externalFile({ temperature: 1.8 }); });
     await page.getByRole('button', { name: '另存并使用', exact: true }).click(); const independent = page.getByRole('dialog', { name: '另存并使用', exact: true });
     await independent.getByRole('textbox').fill('original'); await independent.getByRole('button', { name: '保存副本并切换使用', exact: true }).click();
-    await independent.getByRole('alert').waitFor(); check('仅改大小写无法绕同目标锁且POST不增加', await page.evaluate(() => fixture.counters().writes === 2));
+    await independent.getByRole('alert').waitFor(); check('另存时只改大小写算已有名字且不发保存', await page.evaluate(() => fixture.counters().writes === 2));
     await independent.getByRole('textbox').fill('F1 Independent copy'); await independent.getByRole('button', { name: '保存副本并切换使用', exact: true }).click();
     await page.getByRole('status').filter({ hasText: '副本已保存并用上' }).waitFor();
-    check('A未知仍可另存真正新名称并保留运行mine及原文件', await page.evaluate(() => fixture.files.get('F1 Independent copy').temperature === 1.3 && fixture.files.get('Original').temperature === 1.8 && fixture.current().name === 'F1 Independent copy'));
+    check('另存新名称保留运行配置及原文件', await page.evaluate(() => fixture.files.get('F1 Independent copy').temperature === 1.3 && fixture.files.get('Original').temperature === 1.8 && fixture.current().name === 'F1 Independent copy'));
     await page.evaluate(() => localStorage.clear()); await page.reload(); await search().waitFor();
     await page.evaluate(() => { const before = structuredClone(fixture.files.get('Original')); fixture.journal.put({ id: 'legacy-armed', account: 'preset-test', name: 'Original.', stage: 'armed', mode: 'save', before, expected: { ...before, temperature: 1.1 } }); fixture.notify(); });
-    await page.getByRole('button', { name: '继续存这个名字有什么风险' }).waitFor(); await page.reload(); await search().waitFor();
-    check('老armed刷新仍明确未知且保留查验及新名出口', await page.locator('[data-preset-operation="legacy-armed"]').innerText().then(value => value.includes('还不知道存没存上')) && await page.getByRole('button', { name: '另存并使用', exact: true }).isEnabled());
-    await page.getByRole('button', { name: '继续存这个名字有什么风险' }).click(); const risk = page.getByRole('dialog', { name: '继续存这个名字的风险' });
-    check('风险确认先读真实基线并说明迟到覆盖与不自动保存', (await risk.innerText()).includes('已读到酒馆里的完整内容') && (await risk.innerText()).includes('不代表上次存上了'));
-    await page.screenshot({ path: path.join(output, 'preset-same-target-risk-review.png') });
-    await page.evaluate(() => { window.__presetOriginalSet = Storage.prototype.setItem; Storage.prototype.setItem = function(k, v) { if (k.startsWith('tavern-lite:preset-operation:')) throw new Error('Decision quota'); return window.__presetOriginalSet.call(this, k, v); }; });
-    await risk.getByRole('button', { name: '知道了，继续存这个名字' }).click(); await risk.getByRole('alert').filter({ hasText: '没记下这次保存' }).waitFor();
-    check('决定持久失败不会解锁同名或自动写入', await page.getByRole('button', { name: '保存到此预设', exact: true }).isDisabled() && await page.evaluate(() => fixture.counters().writes === 0 && !fixture.journal.get('preset-test', 'legacy-armed').userDecision));
-    await page.evaluate(() => { Storage.prototype.setItem = window.__presetOriginalSet; });
-    await risk.getByRole('button', { name: '知道了，继续存这个名字' }).click(); await page.getByRole('status').filter({ hasText: '已记下，可以接着改' }).waitFor();
-    check('明确决定解锁但保存事实仍未知且不改配置', await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled() && await page.evaluate(() => fixture.counters().writes === 0 && fixture.current().full.temperature === .7 && fixture.journal.get('preset-test', 'legacy-armed').writeOutcome === 'unknown'));
-    await page.reload(); await search().waitFor(); check('决定刷新仍有效且历史记录未删除', await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled() && await page.locator('[data-preset-operation="legacy-armed"]').count() === 1);
-    await page.screenshot({ path: path.join(output, 'preset-decided-history-retained.png'), fullPage: true });
+    await page.reload(); await search().waitFor();
+    check('旧版留下的没回音记录不显示、不锁按钮', await page.locator('[data-preset-operation]').count() === 0 && await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled());
+    await page.evaluate(() => fixture.externalRuntime({ temperature: 1.25 })); await page.getByRole('button', { name: '保存到此预设', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '已存进预设；之后' }).waitFor();
+    check('旧记录在时同名保存照常写入', await page.evaluate(() => fixture.files.get('Original').temperature === 1.25 && fixture.counters().writes === 1));
     await page.evaluate(() => localStorage.clear()); await page.reload(); await search().waitFor();
     await page.evaluate(() => fixture.externalRuntime({ temperature: 1.2 }));
     await page.getByRole('button', { name: '查看这 1 处改动', exact: true }).waitFor();
@@ -227,8 +216,8 @@ try {
         }, failure);
         await page.getByRole('button', { name: '查看这 1 处改动', exact: true }).waitFor();
         await page.getByRole('button', { name: '保存到此预设', exact: true }).click();
-        await page.getByRole('status').filter({ hasText: '已存进预设，但还没检查完' }).waitFor();
-        check(`${failure}没加载出来保留已保存事实但不假装差异已清或自动再写`, await page.getByRole('button', { name: '保存到此预设', exact: true }).isDisabled()
+        await page.getByRole('status').filter({ hasText: '已存进预设，但读回来核对时没连上' }).waitFor();
+        check(`${failure}没加载出来保留已保存事实、不自动再写，按钮仍可再存`, await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled()
             && await page.getByRole('button', { name: '重新加载', exact: true }).isEnabled() && await page.evaluate(() => fixture.counters().writes === 1 && fixture.files.get('Original').temperature === 1.3));
         await page.locator('main:visible .tl-page-header').getByRole('button', { name: '返回', exact: true }).click();
         await page.getByRole('dialog', { name: '改动还没检查完', exact: true }).waitFor();
@@ -280,73 +269,21 @@ try {
             await page.evaluate(() => { window.__rejectNewReturnRead = true; fixture.notify(); });
             await page.getByRole('alert').filter({ hasText: 'Injected newer read failed' }).waitFor();
             await page.evaluate(() => window.__releaseOldReturnRead());
-            await page.getByRole('status').filter({ hasText: '已存进预设，但还没检查完' }).waitFor();
-            check('较新没加载出来时旧成功不能解除未核对限制', await page.getByRole('button', { name: '保存到此预设', exact: true }).isDisabled()
+            await page.getByRole('status').filter({ hasText: '已存进预设，但读回来核对时没连上' }).waitFor();
+            check('较新没加载出来时如实提示没核对上，按钮仍可再存', await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled()
                 && await page.getByRole('button', { name: '重新加载', exact: true }).isEnabled() && await page.evaluate(() => fixture.counters().writes === 1));
         }
     }
 
-    // Read-only recovery can newly confirm an old unknown write; it shares the same UI commit boundary.
-    await page.evaluate(() => localStorage.clear()); await page.reload(); await search().waitFor();
-    await page.evaluate(() => { fixture.externalRuntime({ temperature: 1.1 }); fixture.fault('abort'); });
-    await page.getByRole('button', { name: '查看这 1 处改动', exact: true }).waitFor();
-    await page.getByRole('button', { name: '保存到此预设', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: '还不知道存没存上' }).waitFor();
-    await page.evaluate(() => {
-        const operation = fixture.journal.list('preset-test')[0]; fixture.files.set(operation.name, structuredClone(operation.expected)); fixture.fault('');
-        const read = fixture.bridge.presetEditorState, recover = fixture.bridge.presetEditorRecover;
-        let hold = false; const gate = new Promise(resolve => { window.__releaseRecoveryRead = resolve; });
-        fixture.bridge.presetEditorState = async () => { if (hold) await gate; return read(); };
-        fixture.bridge.presetEditorRecover = async input => { const result = await recover(input); hold = true; return result; };
-    });
-    await page.getByRole('button', { name: '检查这次保存', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: '已存进预设，正在检查' }).waitFor();
-    check('只读恢复确认也等待当前差异，且不发第二次写入', await page.getByRole('button', { name: '正在保存…', exact: true }).isDisabled() && await page.evaluate(() => fixture.counters().writes === 1));
-    await page.evaluate(() => window.__releaseRecoveryRead()); await page.getByRole('status').filter({ hasText: '已存进预设；之后' }).waitFor();
-    await page.locator('main:visible .tl-page-header').getByRole('button', { name: '返回', exact: true }).click();
-    check('只读恢复成功立即返回不误弹旧差异提醒', await page.getByRole('dialog').count() === 0 && await page.evaluate(() => window.__presetBackCount === 1 && fixture.counters().writes === 1));
-
-    // A save whose answer was lost and that reached the server later is checked by itself on the next visit, read-only.
+    // A save whose answer was lost leaves nothing to deal with on the next visit: saving again just overwrites.
     await page.evaluate(() => localStorage.clear()); await page.reload(); await search().waitFor();
     await page.evaluate(() => { fixture.externalRuntime({ temperature: 1.15 }); fixture.fault('abort'); });
     await page.getByRole('button', { name: '查看这 1 处改动', exact: true }).waitFor();
-    await page.getByRole('button', { name: '保存到此预设', exact: true }).click(); await page.getByRole('status').filter({ hasText: '还不知道存没存上' }).waitFor();
-    await page.evaluate(() => {
-        const operation = fixture.journal.list('preset-test')[0], stored = JSON.parse(localStorage.getItem('preset-fixture'));
-        stored.files = stored.files.map(([name, value]) => [name, name === operation.name ? operation.expected : value]);
-        localStorage.setItem('preset-fixture', JSON.stringify(stored));
-    });
-    await page.reload(); await search().waitFor();
-    await page.waitForFunction(() => !document.querySelector('[data-preset-operation]'), null, { timeout: 10000 }).catch(() => {});
-    check('下次打开预设页自动核对上次没核对完的保存，对上就不再拦着，也不重写', await page.locator('[data-preset-operation]').count() === 0
-        && await page.evaluate(() => fixture.counters().writes === 0 && fixture.journal.list('preset-test').every(op => op.writeOutcome !== 'unknown')));
-
-    // Confirmed recovery must retire the component's old unknown receipt even if the UI read fails.
-    await page.evaluate(() => localStorage.clear()); await page.reload(); await search().waitFor();
-    await page.evaluate(() => { fixture.externalRuntime({ temperature: 1.2 }); fixture.fault('abort'); });
-    await page.getByRole('button', { name: '查看这 1 处改动', exact: true }).waitFor();
-    await page.getByRole('button', { name: '保存到此预设', exact: true }).click(); await page.getByRole('status').filter({ hasText: '还不知道存没存上' }).waitFor();
-    await page.evaluate(() => {
-        const operation = fixture.journal.list('preset-test')[0]; fixture.files.set(operation.name, structuredClone(operation.expected)); fixture.fault('');
-        const read = fixture.bridge.presetEditorState, recover = fixture.bridge.presetEditorRecover;
-        window.__failConfirmedRecoveryRead = false;
-        fixture.bridge.presetEditorState = async () => { if (window.__failConfirmedRecoveryRead) throw new Error('Injected confirmed recovery read failure'); return read(); };
-        fixture.bridge.presetEditorRecover = async input => { const result = await recover(input); window.__failConfirmedRecoveryRead = true; return result; };
-    });
-    await page.getByRole('button', { name: '检查这次保存', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: '已存进预设，但还没检查完' }).waitFor();
-    check('恢复确认但页面没加载出来仍保留文件确认事实且只临时等待核对', await page.getByRole('button', { name: '保存到此预设', exact: true }).isDisabled()
-        && await page.evaluate(() => fixture.journal.list('preset-test').length === 0 && fixture.counters().writes === 1 && fixture.files.get('Original').temperature === 1.2));
-    const retryRecoveryRead = page.getByRole('button', { name: '重新加载', exact: true });
-    await retryRecoveryRead.evaluate(el => el.addEventListener('click', () => { window.__failConfirmedRecoveryRead = false; }, { once: true, capture: true })); await retryRecoveryRead.click();
-    await page.getByRole('status').filter({ hasText: '已重新加载' }).waitFor();
-    const recoveredPending = await page.evaluate(() => ({ writes: fixture.counters().writes, operations: fixture.journal.list('preset-test'),
-        visibleOperations: document.querySelectorAll('[data-preset-operation]').length,
-        saveDisabled: [...document.querySelectorAll('button')].find(el => el.textContent === '保存到此预设')?.disabled,
-        status: document.querySelector('.tl-preset-savebar [role="status"]')?.textContent }));
-    await fs.writeFile(path.join(output, 'preset-recovery-read-retry.json'), JSON.stringify(recoveredPending, null, 2));
-    await page.screenshot({ path: path.join(output, 'preset-recovery-read-retry.png') });
-    check('确认恢复的页面重读成功后清除旧unknown组件锁且不重复写', !recoveredPending.saveDisabled && recoveredPending.visibleOperations === 0 && recoveredPending.operations.length === 0 && recoveredPending.writes === 1, recoveredPending);
+    await page.getByRole('button', { name: '保存到此预设', exact: true }).click(); await page.getByRole('status').filter({ hasText: '可能没存上' }).waitFor();
+    await page.evaluate(() => fixture.fault('')); await page.reload(); await search().waitFor();
+    check('下次打开预设页不留没回音的提示，按钮可用', await page.locator('[data-preset-operation]').count() === 0 && await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled());
+    await page.getByRole('button', { name: '保存到此预设', exact: true }).click(); await page.getByRole('status').filter({ hasText: '已存进预设；之后' }).waitFor();
+    check('下次打开后同名再存直接覆盖', await page.evaluate(() => fixture.files.get('Original').temperature === 1.15 && fixture.counters().writes === 1));
 
     // Exercise the real goBack/useBackLayer history path, rather than only counting a callback.
     await page.evaluate(() => localStorage.clear()); await page.goto(origin + '/__preset-editor?realBack=1'); await search().waitFor();
@@ -360,8 +297,8 @@ try {
     check('保存成功立即真实返回只回到高级设置来源层', await page.getByRole('dialog').count() === 0 && await page.evaluate(() => location.hash === '#setup' && !history.state?.tlLayer && window.__presetBackCount === 1));
     for (const failure of ['getter', 'methods']) {
         await page.goto(origin + '/__preset-editor?blockedStorage=' + failure); await search().waitFor();
-        check(`禁存储${failure}仍完成模块与页面安装且显示只读配置`, await page.evaluate(() => basicChatProbe() === 'available') && await page.getByRole('alert').filter({ hasText: '本机存储恢复前存不了预设' }).isVisible());
-        check(`禁存储${failure}明确阻止命名写入`, await page.getByRole('button', { name: '保存到此预设', exact: true }).isDisabled() && await page.evaluate(() => fixture.counters().writes === 0));
+        check(`禁存储${failure}仍完成模块与页面安装`, await page.evaluate(() => basicChatProbe() === 'available'));
+        check(`禁存储${failure}仍能保存到预设`, await page.getByRole('button', { name: '保存到此预设', exact: true }).isEnabled());
         await openMain(); await text().fill('Memory draft while storage is blocked');
         check(`禁存储${failure}保留内存输入并明确提示读取故障`, await text().inputValue() === 'Memory draft while storage is blocked' && await page.getByRole('alert').filter({ hasText: '读不到本机的草稿' }).isVisible());
     }

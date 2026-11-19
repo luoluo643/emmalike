@@ -117,12 +117,23 @@ export function normalizePresetOperation(op) {
     return value;
 }
 export const hasPresetUserDecision = op => op?.userDecision?.acknowledgement === PRESET_DECISION_ACK && op.userDecision.operationId === op.id;
-export const isBlockingPresetOperation = op => normalizePresetOperation(op)?.writeOutcome === 'unknown' && !hasPresetUserDecision(op);
+/**
+ * A save whose result is unknown can only overwrite a later one while its request may still reach the tavern. The
+ * tavern answered (`writeSettled: 'resolved'`), or the window since the receipt was written has passed: nothing of it
+ * can arrive any more. Receipts without a time were written before times were kept, so long before now.
+ */
+export const PRESET_LATE_WRITE_MS = 2 * 60 * 1000;
+export const presetLateWriteEnds = op => op?.writeSettled === 'resolved' || !(op?.at > 0) ? 0 : op.at + PRESET_LATE_WRITE_MS;
+export const isBlockingPresetOperation = (op, now = Date.now()) => normalizePresetOperation(op)?.writeOutcome === 'unknown' && !hasPresetUserDecision(op)
+    && now < presetLateWriteEnds(op);
 export const PRESET_RECEIPT_PREFIX = 'tavern-lite:preset-operation:';
-/** A receipt nothing shows or reads again: a confirmed save (not a copy still to be used), or a proven non-write. */
-export const isSettledPresetOperation = op => {
+/** A receipt nothing shows or reads again: a confirmed save (not a copy still to be used), a proven non-write, or an
+ * unknown one that can no longer arrive late. */
+export const isSettledPresetOperation = (op, now = Date.now()) => {
     const value = normalizePresetOperation(op);
-    return !!value && !hasPresetUserDecision(value) && (value.writeOutcome === 'not-submitted' || value.writeOutcome === 'confirmed' && value.stage === 'confirmed');
+    if (!value) return false;
+    if (value.writeOutcome === 'unknown') return now >= presetLateWriteEnds(value);
+    return !hasPresetUserDecision(value) && (value.writeOutcome === 'not-submitted' || value.writeOutcome === 'confirmed' && value.stage === 'confirmed');
 };
 /**
  * Each preset save leaves a receipt holding the whole preset (a long one is a few hundred KB), and the device storage

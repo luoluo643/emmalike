@@ -39,17 +39,19 @@ test('a storage full of old settled receipts is cleared, and the save goes throu
     assert.equal(receipts(storage).length, 1);
 });
 
-test('unknown, user-decided and copy-not-yet-used receipts are never pruned', () => {
+test('copy-not-yet-used receipts and a save still in flight are kept; older unknown ones go', () => {
     const storage = memoryStorage(), put = (id, extra) => storage.setItem(`${PRESET_RECEIPT_PREFIX}${JSON.stringify(['a', id])}`, JSON.stringify({ version: 2, id, account: 'a', name: 'P', expected: seedPreset(), ...extra }));
     put('unknown', { stage: 'armed', writeOutcome: 'unknown' });
+    put('fresh', { stage: 'armed', writeOutcome: 'unknown', at: Date.now() });
+    put('answered', { stage: 'unconfirmed', writeOutcome: 'unknown', writeSettled: 'resolved', at: Date.now() });
     put('copy', { mode: 'copy', stage: 'saved-not-applied', writeOutcome: 'confirmed' });
     put('decided', { stage: 'unconfirmed', writeOutcome: 'unknown', userDecision: { acknowledgement: 'late-write-can-overwrite-v1', operationId: 'decided' } });
     put('legacy', { version: 1, stage: 'armed' });
     put('done', { stage: 'confirmed', writeOutcome: 'confirmed' });
     put('none', { stage: 'not-submitted', writeOutcome: 'not-submitted', notSubmittedProof: { kind: 'write-not-invoked' } });
     storage.setItem('tavern-lite:preset-draft:x', '{}'); storage.setItem(`${PRESET_RECEIPT_PREFIX}broken`, '{');
-    assert.equal(pruneSettledPresetReceipts(storage), 2);
-    assert.deepEqual(receipts(storage).map(k => k.includes('"') ? JSON.parse(k.slice(PRESET_RECEIPT_PREFIX.length))[1] : k.slice(PRESET_RECEIPT_PREFIX.length)).sort(), ['broken', 'copy', 'decided', 'legacy', 'unknown']);
+    assert.equal(pruneSettledPresetReceipts(storage), 6);
+    assert.deepEqual(receipts(storage).map(k => k.includes('"') ? JSON.parse(k.slice(PRESET_RECEIPT_PREFIX.length))[1] : k.slice(PRESET_RECEIPT_PREFIX.length)).sort(), ['broken', 'copy', 'fresh']);
     assert.equal(storage.getItem('tavern-lite:preset-draft:x'), '{}');
 });
 

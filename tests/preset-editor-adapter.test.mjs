@@ -31,22 +31,22 @@ test('application failure is saved-not-applied and only explicit use retries nat
     assert.equal(result.kind, 'saved-not-applied'); assert.equal(result.fileConfirmed, true); const recovered = await f.bridge.presetEditorRecover(input({ operationId: result.operation.id }));
     assert.equal(recovered.kind, 'historical-observation'); assert.equal(recovered.operation.stage, 'saved-not-applied'); assert.equal(f.counters().uses, 1); assert.equal(f.counters().writes, 1);
 });
-test('lost response blocks duplicates; recreation and read-only recovery do not resend', async () => {
+test('lost response: the copy name now exists; recreation and read-only recovery do not resend', async () => {
     const storage = memoryStorage(), f = createPresetFixture({ storage, persist: true }); await f.bridge.presetEditorState(); f.fault('unknown'); const result = await f.bridge.presetEditorSave(input({ copyName: 'Copy' }));
-    assert.equal(result.kind, 'unconfirmed'); await assert.rejects(f.bridge.presetEditorSave(input({ copyName: 'Copy' })), { code: 'PRESET_SAVE_PENDING' });
+    assert.equal(result.kind, 'unconfirmed'); await assert.rejects(f.bridge.presetEditorSave(input({ copyName: 'Copy' })), { code: 'PRESET_NAME_EXISTS' });
     const reloaded = createPresetFixture({ storage, persist: true }); const recovery = await reloaded.bridge.presetEditorRecover(input({ operationId: result.operation.id }));
     assert.equal(recovery.fileConfirmed, true); assert.equal(reloaded.counters().writes, 0); assert.equal(reloaded.counters().uses, 0);
 });
-test('HTTP rejection plus unchanged readback remains unknown and blocks the same target', async () => {
+test('HTTP rejection plus unchanged readback remains unknown; saving the same name again overwrites', async () => {
     const f = createPresetFixture(); await f.bridge.presetEditorState(); f.externalRuntime({ temperature: 1 }); f.fault('reject'); const result = await f.bridge.presetEditorSave(input());
-    assert.equal(result.kind, 'unconfirmed'); assert.equal(result.operation.writeOutcome, 'unknown'); f.fault(''); await assert.rejects(f.bridge.presetEditorSave(input()), { code: 'PRESET_SAVE_PENDING' });
+    assert.equal(result.kind, 'unconfirmed'); assert.equal(result.operation.writeOutcome, 'unknown'); f.fault(''); assert.equal((await f.bridge.presetEditorSave(input())).kind, 'confirmed'); assert.equal(f.files.get('Original').temperature, 1); assert.equal(f.counters().writes, 2);
 });
-test('receipt failure before HTTP forbids writing; postwrite quota preserves readback and blocks duplicate copy', async () => {
+test('a device that cannot keep receipts still saves; the readback still confirms it', async () => {
     const storage = memoryStorage(), f = createPresetFixture({ storage }); await f.bridge.presetEditorState(); const setItem = storage.setItem;
-    storage.setItem = () => { throw new Error('quota'); }; await assert.rejects(f.bridge.presetEditorSave(input()), { code: 'PRESET_RECEIPT_UNAVAILABLE' }); assert.equal(f.counters().writes, 0);
+    f.externalRuntime({ temperature: 1 }); storage.setItem = () => { throw new Error('quota'); };
+    const saved = await f.bridge.presetEditorSave(input()); assert.equal(saved.kind, 'confirmed'); assert.ok(saved.operation.receiptError); assert.equal(f.files.get('Original').temperature, 1); assert.equal(f.counters().writes, 1);
     storage.setItem = setItem; f.onWrite(() => { storage.setItem = () => { throw new Error('quota'); }; }); const result = await f.bridge.presetEditorSave(input({ copyName: 'Copy' }));
-    assert.equal(result.fileConfirmed, true); assert.ok(result.operation.receiptError); assert.equal(f.counters().writes, 1);
-    await assert.rejects(f.bridge.presetEditorSave({ account: 'preset-test', name: 'Copy', copyName: 'Another' }), { code: 'PRESET_RECEIPT_UNAVAILABLE' }); assert.equal(f.counters().writes, 1);
+    assert.equal(result.fileConfirmed, true); assert.ok(result.operation.receiptError); assert.equal(f.counters().writes, 2);
 });
 test('queued prompt apply rejects preset switch and leaves other preset untouched', async () => {
     const f = createPresetFixture(); const request = f.bridge.presetEditorApplyPrompt(input({ identifier: 'main', base: 'Original main body', text: 'Mine' })); f.switchPreset('Other');
@@ -65,8 +65,9 @@ test('account switch during queued work prevents native writes', async () => {
 test('preset switch after HTTP started cannot auto-apply copy and leaves durable recovery identity', async () => {
     const f = createPresetFixture(); await f.bridge.presetEditorState(); f.hold('write'); const pending = f.bridge.presetEditorSave(input({ copyName: 'Copy' })); await tick();
     f.switchPreset('Other'); f.release('write'); await assert.rejects(pending, { code: 'PRESET_CHANGED' });
-    assert.equal(f.counters().uses, 0); assert.equal(f.current().name, 'Other'); const state = await f.bridge.presetEditorState(); assert.equal(state.operations.length, 1);
-    const result = await f.bridge.presetEditorRecover({ account: 'preset-test', operationId: state.operations[0].id });
+    assert.equal(f.counters().uses, 0); assert.equal(f.current().name, 'Other');
+    const key = [...Array(f.storage.length)].map((_, i) => f.storage.key(i)).find(k => k.startsWith('tavern-lite:preset-operation:'));
+    const result = await f.bridge.presetEditorRecover({ account: 'preset-test', operationId: JSON.parse(f.storage.getItem(key)).id });
     assert.equal(result.kind, 'saved-not-applied'); assert.equal(f.counters().writes, 1); assert.equal(f.current().name, 'Other');
 });
 test('a switch answers with the named preset read moments ago; opening and explicit reads go to the server', async () => {

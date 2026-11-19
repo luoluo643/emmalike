@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import * as engine from './engine.js';
 import { EngineStatus, PageHeader, Sheet, Spinner, friendlyError, go, goBack, useBackLayer } from './ui.jsx';
-import { applySavedPromptDraft, canSubmitPresetKey, clonePreset, createPromptDraftStore, makePromptDraft, PRESET_FIELDS, presetScope, presetSearch, refreshPromptDraft, isBlockingPresetOperation, hasPresetUserDecision, presetTargetKey, PRESET_DECISION_ACK } from './preset-editor-model.js';
+import { applySavedPromptDraft, canSubmitPresetKey, clonePreset, createPromptDraftStore, makePromptDraft, PRESET_FIELDS, presetScope, presetSearch, refreshPromptDraft } from './preset-editor-model.js';
 import './preset-editor.css';
 
 const BUILT_IN = { main: '主提示词', nsfw: '辅助提示词', jailbreak: '后置指令', enhanceDefinitions: '增强定义', chatHistory: '聊天记录', worldInfoBefore: '世界书（角色设定前）', worldInfoAfter: '世界书（角色设定后）', dialogueExamples: '对话示例', charDescription: '角色设定', charPersonality: '角色性格', scenario: '场景', personaDescription: '我的身份介绍' };
@@ -307,14 +307,13 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
         const timer = setTimeout(() => setFresh(''), 2400); return () => clearTimeout(timer);
     }, [fresh]);
     const shownOn = prompt => applying?.key === `enabled:${prompt.identifier}` ? applying.value : prompt.enabled;
-    const recordOperation = result => setPending(isBlockingPresetOperation(result.operation) || result.kind === 'saved-not-applied' ? result.operation : null);
+    const recordOperation = result => setPending(result.kind === 'saved-not-applied' ? result.operation : null);
     const recordResult = result => {
         const text = result.kind === 'confirmed' ? result.applied ? `副本已保存并用上：「${presetName(result.name)}」，原预设没动` : '已存进预设；之后的改动还要再存'
             : result.kind === 'saved-not-applied' ? `副本已保存，但还没确认切过去。现在用的是「${presetName(result.actualCurrent)}」。${result.error || ''}`
                 : result.kind === 'not-submitted' ? result.error || '这次没存，设置和草稿都还在，可以再试'
-                    : result.kind === 'user-decided' ? result.error
-                        : result.kind === 'historical-observation' ? `已检查上次保存：${result.fileConfirmed ? '跟上次存的一样' : '跟上次存的不一样'}。现在的设置没动`
-                            : result.error?.includes('还不知道存没存上') ? result.error : `还不知道存没存上。${result.error || '先检查一下，也可以另存一个新名字'}`;
+                        : result.kind === 'historical-observation' ? `查过了：上次${result.fileConfirmed ? '已经存好' : '存的内容跟现在酒馆里的不一样'}。现在的设置没动`
+                            : result.error || '这次可能没存上，设置都还在，再存一次就好';
         setStatus(text); recordOperation(result); notify(text, 'info');
     };
     const recordRefreshedResult = async result => {
@@ -326,12 +325,12 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
             unverified.current = true; setNeedsRead(true); setStatus('已存进预设，正在检查…');
             const read = await reload();
             if (!mounted.current) return true;
-            if (!read.ok) { unverified.current = true; setNeedsRead(true); setStatus('已存进预设，但还没检查完。重新加载后再存'); return true; }
+            if (!read.ok) { unverified.current = true; setNeedsRead(true); setStatus('已存进预设，但读回来核对时没连上'); return true; }
         }
         recordResult(result); return refreshed;
     };
     const save = async intent => {
-        if (lock.current || unverified.current) return; lock.current = true; setSaving(true); setError(''); setConflicts([]); saveIntent.current = intent;
+        if (lock.current) return; lock.current = true; setSaving(true); setError(''); setConflicts([]); saveIntent.current = intent;
         let refreshed = false;
         const source = current.current; setStatus(intent?.copyName ? '正在保存副本，存好就切过去…' : '正在保存…');
         try {
@@ -356,20 +355,6 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
         catch (e) { if (mounted.current) setError(friendlyError(e.message)); }
         finally { lock.current = false; if (mounted.current) { setSaving(false); if (!refreshed) reload(); } }
     };
-    const prepareDecision = async operation => {
-        if (lock.current) return; lock.current = true; setBusy(true); setError('');
-        try { const preview = await bridge.presetEditorPrepareDecision({ account: state.account, operationId: operation.id });
-            if (mounted.current) setSheet({ type: 'decision', preview }); }
-        catch (e) { if (mounted.current) setError(friendlyError(e.message)); }
-        finally { lock.current = false; if (mounted.current) setBusy(false); }
-    };
-    const decide = async preview => {
-        if (lock.current) return; lock.current = true; setBusy(true); setError('');
-        try { const result = await bridge.presetEditorDecide({ ...preview, acknowledgement: PRESET_DECISION_ACK });
-            if (mounted.current) { recordResult(result); setSheet(null); } }
-        catch (e) { if (mounted.current) setError(friendlyError(e.message)); }
-        finally { lock.current = false; if (mounted.current) { setBusy(false); reload(); } }
-    };
     const openPrompt = prompt => { remember(); setEditing({ origin: clonePreset(state), prompt: clonePreset(prompt) }); };
     const done = () => { setEditing(null); reload(); requestAnimationFrame(() => { if (listPage.current) listPage.current.scrollTop = views.get(viewScope)?.scrollTop || 0; }); };
     const needle = query.trim().toLocaleLowerCase();
@@ -379,8 +364,6 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
     const modifiedKeys = new Set(state?.changes.map(item => item.path[0]));
     const operations = [...(state?.operations || [])];
     if (pending && pending.account === state?.account && !operations.some(op => op.id === pending.id)) operations.push(pending);
-    const blockedTarget = operations.some(op => isBlockingPresetOperation(op)
-        && presetTargetKey(op.account, op.apiId, op.name, state?.caseSensitiveNames) === state?.targetKey);
     const immediateBusy = busy || saving;
     const confirmSwitch = action => {
         setSheet(null);
@@ -390,16 +373,6 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
         }
         if (action.type === 'use-copy') recover(action.operation, true); else select(action.target);
     };
-    // A save whose result was never seen (the page was stopped mid-save, or this is a later visit) is checked once on
-    // its own. The check only reads the server; only a result that is still unknown is left for the author.
-    // Only records there when the page opened: a save made during this visit is followed by the page itself.
-    const autoChecked = useRef(new Set()), leftBefore = useRef(null);
-    useEffect(() => {
-        if (state && !leftBefore.current) leftBefore.current = new Set((state.operations || []).map(op => op.id));
-        const next = (state?.operations || []).find(op => leftBefore.current?.has(op.id) && isBlockingPresetOperation(op) && !autoChecked.current.has(op.id));
-        if (!next || lock.current || saving || busy) return;
-        autoChecked.current.add(next.id); recover(next);
-    }, [state, saving, busy]);
 
     return <>
         {editing ? <PromptEditor key={presetScope(editing.origin.account, editing.origin.name, editing.prompt.identifier)} {...editing} active={state} bridge={bridge} onDone={done} reload={reload} requestSwitch={requestSwitch} onState={next => { current.current = next; setState(next); }} />
@@ -413,11 +386,10 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
                 {state && <>
                     <label class="tl-field-group">切换使用的预设<select class="tl-input" value={state.name} disabled={busy || saving} onChange={e => requestSwitch(e.currentTarget.value)}>{state.choices.map(name => <option value={name}>{presetName(name)}</option>)}</select></label>
                     <div class="tl-preset-savebar"><strong>现在用的是「{presetName(state.name)}」</strong><p role="status">{status || (state.changes.length ? `当前配置有 ${state.changes.length} 处没存进预设` : '都已存进预设')}</p>
-                        <div class="tl-row"><button class="tl-button tl-primary" disabled={busy || saving || needsRead || blockedTarget || state.capabilities?.namedWrite === false} onClick={() => save({})}>{saving ? '正在保存…' : '保存到此预设'}</button>
-                            <button class="tl-button" disabled={busy || saving || needsRead || state.capabilities?.copyAndUse === false} onClick={() => { setCopyName(`${state.name} 副本`); setError(''); setSheet({ type: 'copy' }); }}>另存并使用</button></div></div>
+                        <div class="tl-row"><button class="tl-button tl-primary" disabled={busy || saving} aria-busy={saving ? 'true' : undefined} onClick={() => save({})}>{saving ? <><Spinner />正在保存…</> : '保存到此预设'}</button>
+                            <button class="tl-button" disabled={busy || saving} onClick={() => { setCopyName(`${state.name} 副本`); setError(''); setSheet({ type: 'copy' }); }}>另存并使用</button></div></div>
                     <button class="tl-button tl-preset-jump" onClick={() => document.getElementById('tl-preset-prompts')?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })}>
                         提示词条目 · {state.prompts.filter(p => p.enabled).length}/{state.prompts.length} 条打开 ↓</button>
-                    {state.storageError && <p class="tl-error" role="alert">{state.storageError}。设置还能看，但本机存储恢复前存不了预设。</p>}
                     {state.changes.length > 0 && <div><button class="tl-button" onClick={() => setShowChanges(value => !value)}>查看这 {state.changes.length} 处改动</button>
                         {showChanges && <div class="tl-preset-change-list">{state.changes.map(change => <button class="tl-link" onClick={() => {
                             const prompt = state.prompts.find(p => p.identifier === change.path[1]?.value);
@@ -427,10 +399,8 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
                     {!!conflicts.length && <Conflicts conflicts={conflicts} onChoose={(conflict, take) => {
                         resolutions.current[conflict.key] = { take, server: clonePreset(conflict.server) }; const remaining = conflicts.filter(item => item.key !== conflict.key); setConflicts(remaining); if (!remaining.length) save(saveIntent.current);
                     }} />}
-                    {operations.map(operation => <section class="tl-preset-warning" key={operation.id} data-preset-operation={operation.id}><p>保存到：「{presetName(operation.name)}」。{isBlockingPresetOperation(operation) ? '还不知道存没存上，先不重复保存；聊天不受影响' : hasPresetUserDecision(operation) ? '已记下，可以接着改；上次的保存可能晚到并盖掉' : '副本已保存，还没用上'}查验只读取服务器，不会再写入。</p>
-                        <button class="tl-button" disabled={saving || busy} onClick={() => recover(operation)}>检查这次保存</button>
-                        {isBlockingPresetOperation(operation) && bridge.presetEditorPrepareDecision && <button class="tl-button" disabled={saving || busy || state.capabilities?.namedWrite === false} onClick={() => prepareDecision(operation)}>继续存这个名字有什么风险</button>}
-                        {operation.mode === 'copy' && operation.stage === 'saved-not-applied' && <button class="tl-button" disabled={saving || busy} onClick={() => setSheet({ type: 'use-copy', operation, source: switchSource(), unverified: unverified.current })}>使用已保存副本</button>}</section>)}
+                    {operations.filter(op => op.mode === 'copy' && op.stage === 'saved-not-applied').map(operation => <section class="tl-preset-warning" key={operation.id} data-preset-operation={operation.id}><p>副本「{presetName(operation.name)}」已经存好，还没切过去用</p>
+                        <button class="tl-button" disabled={saving || busy} onClick={() => setSheet({ type: 'use-copy', operation, source: switchSource(), unverified: unverified.current })}>切到这个副本</button></section>)}
                     <div class="tl-chips tl-preset-view" role="group" aria-label="预设设置显示范围">{[['common', '常用'], ['all', '全部设置']].map(([id, label]) => <button class="tl-chip" aria-pressed={view === id} onClick={() => { setView(id); try { localStorage.setItem(`tavern-lite:preset-view:${state.account}`, id); } catch {} }}>{label}</button>)}</div>
                     <input class="tl-input tl-search" type="search" aria-label="搜索当前预设" placeholder="搜索当前预设的名称或正文" value={query} onInput={e => setQuery(e.currentTarget.value)} />
                     {needle && <p class="tl-muted">只搜当前预设。搜到的高级条目会临时展开</p>}
@@ -455,16 +425,11 @@ export function PresetPage({ eng, notify = () => {}, onOpenPanel, bridge: suppli
             </main>}
         {renaming && state && <RenameSheet origin={state} prompt={renaming} bridge={bridge} onClose={() => setRenaming(null)}
             onRenamed={(next, name) => { current.current = next; setState(next); setRenaming(null); setFresh(renaming.identifier); setStatus(`已改名为「${name}」，还没存进预设`); }} />}
-        {sheet && <Sheet title={sheet.type === 'copy' ? '另存并使用' : sheet.type === 'decision' ? '继续存这个名字的风险' : sheet.type === 'leave' ? sheet.unverified ? '改动还没检查完' : '改动已经生效' : sheet.unverified ? '切换前改动还没检查完' : '确认切换预设'} busy={busy || saving} onClose={() => setSheet(null)}>
+        {sheet && <Sheet title={sheet.type === 'copy' ? '另存并使用' : sheet.type === 'leave' ? sheet.unverified ? '改动还没检查完' : '改动已经生效' : sheet.unverified ? '切换前改动还没检查完' : '确认切换预设'} busy={busy || saving} onClose={() => setSheet(null)}>
             {sheet.type === 'copy' ? <div class="tl-preset-copy-form"><p>把现在生效的设置另存一份并切过去，原预设不动；没应用的文字留在原预设</p>
-                <p class="tl-muted">原预设还不知道存没存上时，可以另存一个不同的新名字（只改大小写不算）</p>
                 <label>副本名称<input class="tl-input" value={copyName} disabled={saving} onInput={e => setCopyName(e.currentTarget.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
                     onKeyDown={e => { if (canSubmitPresetKey(e) && !composing.current) { e.preventDefault(); save({ copyName }); } }} /></label>
                 {error && <p class="tl-error" role="alert">{error}</p>}<button class="tl-button tl-primary" disabled={saving || !copyName.trim()} aria-busy={saving ? 'true' : undefined} onClick={() => save({ copyName })}>{saving ? <><Spinner />正在保存副本…</> : '保存副本并切换使用'}</button></div>
-                : sheet.type === 'decision' ? <div class="tl-preset-copy-form"><p>目标：「{presetName(sheet.preview.operation.name)}」。本次查验{sheet.preview.basis.kind === 'missing' ? '没找到预设文件' : '已读到酒馆里的完整内容'}，仍无法证明旧请求不会晚些写入。继续同名保存后，旧请求仍可能覆盖新版。</p>
-                    <p>这样只是允许你继续存这个名字，不代表上次存上了，也不会取消上次的保存。另存一个新名字可以避开这个问题</p>
-                    <details><summary>上次存的和酒馆里现在的差别（{sheet.preview.changes.length} 项）</summary>{sheet.preview.changes.map(change => <label class="tl-field-group">{change.label}<textarea class="tl-input" readOnly rows={4} value={`上次存的：${labelValue(change.before)}\n酒馆里现在：${labelValue(change.after)}`} /></label>)}</details>
-                    {error && <p class="tl-error" role="alert">{error}</p>}<button class="tl-button tl-primary" disabled={saving || busy} onClick={() => decide(sheet.preview)}>知道了，继续存这个名字</button></div>
                 : <div class="tl-preset-copy-form"><p>{sheet.type === 'leave' ? sheet.unverified ? '已存进预设，但没能再检查一遍。之后的改动可能还没存' : '返回不会撤回已经生效的改动。没存进预设的改动，换预设后可能就没了' : sheet.unverified ? '改动还没检查完，可能有没存的。切换会换掉现在的设置，没存的改动可能丢失。可以先不切，重新加载后再决定' : '切换会换掉现在的设置，没存进预设的改动会丢'}</p>
                     {sheet.type !== 'leave' && sheet.unverified && <button class="tl-button" disabled={busy || saving} onClick={() => setSheet(null)}>暂不切换</button>}
                     <button class="tl-button tl-primary" disabled={busy || saving} onClick={() => { const action = sheet; if (action.type === 'leave') { setSheet(null); action.action(); } else confirmSwitch(action); }}>{sheet.type === 'leave' ? '继续返回' : sheet.unverified ? '仍要切换' : '确认切换'}</button></div>}

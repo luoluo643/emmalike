@@ -100,7 +100,7 @@ try {
             fixture.bridge.presetEditorState = async () => { if (window.failRead) throw new Error('Synthetic unknown current differences'); return read(); };
             fixture.bridge.presetEditorSave = async input => { const result = await save(input); if (result.kind === 'confirmed') { window.failRead = true; fixture.externalRuntime({ temperature: 1.6 }); } return result; };
         });
-        await page.getByRole('button', { name: '保存到此预设', exact: true }).click(); await page.getByRole('status').filter({ hasText: '已存进预设，但还没检查完' }).waitFor();
+        await page.getByRole('button', { name: '保存到此预设', exact: true }).click(); await page.getByRole('status').filter({ hasText: '已存进预设，但读回来核对时没连上' }).waitFor();
     };
     for (const dirty of [false, true]) for (const action of ['cancel', 'close', 'escape', 'confirm', 'reread-dirty', 'reread-clean']) {
         const label = `old-${dirty ? 'dirty' : 'clean'}-${action}`; await setupUnknown(dirty);
@@ -161,13 +161,13 @@ try {
     await page.getByRole('button', { name: '另存并使用', exact: true }).click();
     await page.getByRole('dialog', { name: '另存并使用', exact: true }).getByRole('textbox').fill('Saved pending copy');
     await page.getByRole('button', { name: '保存副本并切换使用', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: '已存进预设，但还没检查完' }).waitFor();
-    await page.getByRole('button', { name: '使用已保存副本', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '已存进预设，但读回来核对时没连上' }).waitFor();
+    await page.getByRole('button', { name: '切到这个副本', exact: true }).click();
     const copyRisk = page.getByRole('dialog', { name: '切换前改动还没检查完', exact: true }); await copyRisk.waitFor();
     check('未知差异时使用已保存副本也先提示风险，无额外使用或保存', await page.evaluate(() => fixture.counters().uses === 1 && fixture.counters().writes === 1 && fixture.current().full.temperature === 1.6));
     await copyRisk.getByRole('button', { name: '暂不切换', exact: true }).click();
     check('取消使用已保存副本保留后续配置', await page.evaluate(() => fixture.counters().uses === 1 && fixture.counters().writes === 1 && fixture.current().name === 'Original' && fixture.current().full.temperature === 1.6));
-    await page.getByRole('button', { name: '使用已保存副本', exact: true }).click();
+    await page.getByRole('button', { name: '切到这个副本', exact: true }).click();
     await page.evaluate(() => fixture.fault('')); await copyRisk.getByRole('button', { name: '仍要切换', exact: true }).click();
     await page.waitForFunction(() => fixture.current().name === 'Saved pending copy');
     check('明确风险确认后才使用已存副本且不再保存', await page.evaluate(() => fixture.counters().uses === 2 && fixture.counters().writes === 1 && fixture.current().full.temperature === .7));

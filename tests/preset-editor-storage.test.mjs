@@ -22,22 +22,23 @@ test('throwing localStorage getter does not abort native bridge installation or 
         for (const call of [() => journal.put(op), () => journal.get(op.account, op.id), () => journal.list(op.account)]) assert.throws(call, { code: 'PRESET_RECEIPT_UNAVAILABLE' });
         for (const call of [() => drafts.read(identity), () => drafts.write(draft), () => drafts.remove(identity)]) assert.throws(call, { code: 'PRESET_DRAFT_UNAVAILABLE' });
         const fixture = createPresetFixture({ journal }); const state = await fixture.bridge.presetEditorState();
-        assert.equal(state.name, 'Original'); assert.equal(state.capabilities.namedReadback, true); assert.equal(state.capabilities.namedWrite, false); assert.ok(state.storageError);
-        await assert.rejects(fixture.bridge.presetEditorSave({ account: identity.account, name: identity.name }), { code: 'PRESET_RECEIPT_UNAVAILABLE' });
-        assert.equal(fixture.counters().writes, 0); native.disposePresetEditor();
+        assert.equal(state.name, 'Original'); assert.equal(state.capabilities.namedReadback, true); assert.equal(state.capabilities.namedWrite, true); assert.ok(state.storageError);
+        fixture.externalRuntime({ temperature: 1 });
+        assert.equal((await fixture.bridge.presetEditorSave({ account: identity.account, name: identity.name })).kind, 'confirmed');
+        assert.equal(fixture.counters().writes, 1); native.disposePresetEditor();
     } finally { if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor); else delete globalThis.localStorage; }
 });
-test('throwing storage methods are caught and cannot permit a named write', async () => {
+test('throwing storage methods are caught and do not stop a named save', async () => {
     const storage = { get length() { throw new Error('Blocked length'); }, key() { throw new Error('Blocked key'); },
         getItem() { throw new Error('Blocked read'); }, setItem() { throw new Error('Blocked write'); }, removeItem() { throw new Error('Blocked delete'); } };
     const journal = createPresetEditorJournal(storage), drafts = createPromptDraftStore(storage), fixture = createPresetFixture({ journal });
     for (const call of [() => journal.put(op), () => journal.get(op.account, op.id), () => journal.list(op.account)]) assert.throws(call, { code: 'PRESET_RECEIPT_UNAVAILABLE' });
     for (const call of [() => drafts.read(identity), () => drafts.write(draft), () => drafts.remove(identity)]) assert.throws(call, { code: 'PRESET_DRAFT_UNAVAILABLE' });
-    assert.equal((await fixture.bridge.presetEditorState()).capabilities.namedWrite, false);
-    await assert.rejects(fixture.bridge.presetEditorSave({ account: identity.account, name: identity.name }), { code: 'PRESET_RECEIPT_UNAVAILABLE' }); assert.equal(fixture.counters().writes, 0);
+    assert.equal((await fixture.bridge.presetEditorState()).capabilities.namedWrite, true);
+    assert.equal((await fixture.bridge.presetEditorSave({ account: identity.account, name: identity.name })).kind, 'confirmed'); assert.equal(fixture.counters().writes, 1);
 });
-test('write-only storage denial still allows viewing and rejects receipt before network', async () => {
+test('write-only storage denial still allows viewing and saving', async () => {
     const storage = memoryStorage(); storage.setItem = () => { throw new Error('Quota exceeded'); };
     const fixture = createPresetFixture({ storage }); assert.equal((await fixture.bridge.presetEditorState()).name, 'Original');
-    await assert.rejects(fixture.bridge.presetEditorSave({ account: identity.account, name: identity.name }), { code: 'PRESET_RECEIPT_UNAVAILABLE' }); assert.equal(fixture.counters().writes, 0);
+    assert.equal((await fixture.bridge.presetEditorSave({ account: identity.account, name: identity.name })).kind, 'confirmed'); assert.equal(fixture.counters().writes, 1);
 });

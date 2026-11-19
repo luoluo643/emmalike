@@ -29,7 +29,7 @@ export function createPresetEditorJournal(storage) {
             const prefix = PRESET_RECEIPT_PREFIX, list = [];
             try { const deviceStorage = resolveStorage(); for (let i = 0; i < deviceStorage.length; i++) { const k = deviceStorage.key(i); if (!k?.startsWith(prefix)) continue;
                 const value = normalizePresetOperation(JSON.parse(deviceStorage.getItem(k)));
-                if (value?.account === account && (value.writeOutcome === 'unknown' || value.stage === 'saved-not-applied' || hasPresetUserDecision(value))) list.push(value); } }
+                if (value?.account === account && value.mode === 'copy' && value.stage === 'saved-not-applied' && value.writeOutcome === 'confirmed') list.push(value); } }
             catch { throw presetError('PRESET_RECEIPT_UNAVAILABLE', '读不到上次没完成的保存记录'); }
             return list;
         },
@@ -92,7 +92,7 @@ export function createPresetEditorAdapter(d) {
         return { ...clonePreset(current), full, named: clonePreset(named), changes: presetChanges(named, overlayPresetDocument(named, current.full)),
             apiId, targetKey: targetKey(current.name), caseSensitiveNames: caseSensitive,
             operations: operations.filter(op => op.apiId === apiId).map(op => ({ ...op, targetKey: operationKey(op) })), storageError,
-            capabilities: { namedReadback: true, namedWrite: !storageError, copyAndUse: !storageError } };
+            capabilities: { namedReadback: true, namedWrite: true, copyAndUse: true } };
     }
     function presetEditorState({ fresh = true } = {}) { return d.enqueue(() => state(undefined, { fresh })); }
     function presetEditorApplyPrompt(input) {
@@ -175,7 +175,8 @@ export function createPresetEditorAdapter(d) {
         if (exact && !historical) { bases.set(op.name, clonePreset(actual)); namedCopies.set(op.name, { at: Date.now(), value: clonePreset(actual) }); await d.registerNamed(op.name, clonePreset(actual)); d.assertLease(lease); }
         return { kind: historical ? 'historical-observation' : stage, operation: op, name: op.name, actualCurrent: d.current()?.name, fileConfirmed: exact,
             observedChanged: !samePreset(actual, op.before) && !exact,
-            ...(outcome === 'unknown' ? { error: '还不知道存没存上，上次的保存可能晚到。可以再检查、另存一个新名字，或者确认继续存这个名字' } : {}) };
+            ...(outcome === 'unknown' ? { error: op.writeSettled === 'resolved' ? '酒馆说存好了，但读回来的内容跟这里不一样，可能别处同时改过。看一眼没问题就好，要以这里为准就再存一次'
+                : '这次可能没存上，设置都还在，再存一次就好' } : {}) };
     }
     async function useSavedCopy(op, lease, expectedCurrent) {
         const actual = await read(op.name, lease);
@@ -209,7 +210,6 @@ export function createPresetEditorAdapter(d) {
             const requestedName = copy ? validatePresetName(input.copyName) : captured.name;
             const name = await guarded(lease, () => d.canonicalName ? d.canonicalName(requestedName) : normalizePresetTargetName(requestedName));
             if (typeof name !== 'string' || !name || name !== requestedName) fail('INVALID_PRESET_NAME', '这个名字存下来会被改掉，换一个名字');
-            if (journal.list(d.account).some(op => isBlockingPresetOperation(op) && operationKey(op) === targetKey(name))) fail('PRESET_SAVE_PENDING', '还不知道上次存没存上；先检查、另存一个新名字，或者确认继续存这个名字');
             if (copy) {
                 const names = await guarded(lease, () => d.listNamed());
                 if (names.some(item => targetKey(item) === targetKey(name))) fail('PRESET_NAME_EXISTS', '已有同名预设，换个名字（只改大小写不算）');
@@ -224,8 +224,10 @@ export function createPresetEditorAdapter(d) {
             if (merged.kind === 'conflict') return merged;
             const expected = merged.snapshot;
             // Only what recovery compares: the file to expect and the one it replaces (each a whole preset).
-            let op = journal.put({ version: 2, id: uuid(), account: d.account, apiId, targetKey: targetKey(name), name, sourceName: captured.name, mode: copy ? 'copy' : 'save',
-                stage: 'armed', writeOutcome: 'unknown', expected, before: copy ? null : original, writeSettled: null });
+            // Saving the same name again simply overwrites it: an earlier save whose answer never came does not hold
+            // this one back, and a receipt the device cannot keep does not stop the save (it only helps the check after).
+            let op = record({ version: 2, id: uuid(), account: d.account, apiId, targetKey: targetKey(name), name, sourceName: captured.name, mode: copy ? 'copy' : 'save',
+                stage: 'armed', writeOutcome: 'unknown', expected, before: copy ? null : original, writeSettled: null, at: d.now ? d.now() : Date.now() });
             try {
                 // All asynchronous preflight occurs before the synchronous dispatch
                 // boundary. A surviving armed receipt is never proof of non-dispatch.

@@ -363,7 +363,7 @@ async function storageCase(s) {
     await ready(s); await openOwnedChat(s); await concurrentReads(s, 'storage-concurrent-reads');
     s.phase = 'denied-writes';
     const state = unwrap(await invoke(s, 'presetEditorState'));
-    assert.equal(state.capabilities.namedWrite, false); assert.ok(state.storageError);
+    assert.equal(state.capabilities.namedWrite, true); assert.ok(state.storageError);
     const world = unwrap(await invoke(s, 'worldEditorBook', book));
     s.phantom.add(`DENIED_${run}`);
     const writesBefore = await native(s, w => w.__editorNativeWorldWrites.length), httpBefore = s.presetWrites.length;
@@ -371,7 +371,7 @@ async function storageCase(s) {
     const presetSave = await invoke(s, 'presetEditorSave', { account: ACCOUNT, name: presetName });
     check(`${s.name}: world write rejects before native save`, !worldSave.ok && worldSave.error.code === 'WORLD_JOURNAL_UNAVAILABLE'
         && await native(s, w => w.__editorNativeWorldWrites.length) === writesBefore && s.worldWrites.length === 0);
-    check(`${s.name}: named preset write rejects before HTTP`, !presetSave.ok && presetSave.error.code === 'PRESET_RECEIPT_UNAVAILABLE' && s.presetWrites.length === httpBefore);
+    check(`${s.name}: named preset save still goes through without a device receipt`, presetSave.ok && s.presetWrites.length === httpBefore + 1);
     assert.equal(unwrap(await invoke(s, 'worldEditorRuntime')).kind, 'ready');
     await send(s, 'ordinary-send-with-storage-denied');
     const evidence = await native(s, w => w.__editorStorage);
@@ -425,14 +425,14 @@ async function scopedStorageCase(s) {
     await ready(s); await episodesDefault(s,'before'); await openOwnedChat(s); await concurrentReads(s,'scoped-concurrent-reads');
     s.phase='scoped-denied-writes';
     const state=unwrap(await invoke(s,'presetEditorState'));
-    check(`${s.name}: receipt length denial disables named saving visibly`,state.capabilities.namedWrite===false&&!!state.storageError);
+    check(`${s.name}: receipt length denial still allows named saving`,state.capabilities.namedWrite===true&&!!state.storageError);
     const world=unwrap(await invoke(s,'worldEditorBook',book)), before=await native(s,w=>w.__editorNativeWorldWrites.length);
     const attempt=await invoke(s,'saveWorldEditorEntry',{account:ACCOUNT,name:book,uid:0,baseEntry:world.entries[0],patch:{content:`DENIED_${run}`},draftRevision:1});
     check(`${s.name}: IDB rejection causes zero native world save and zero world HTTP`,!attempt.ok&&attempt.error.code==='WORLD_JOURNAL_UNAVAILABLE'&&await native(s,w=>w.__editorNativeWorldWrites.length)===before&&s.worldWrites.length===0);
     for(const mode of ['length','list-get','put']) {
         const beforePaths=await native(s,(w,mode)=>{w.__editorStorage.receiptMode=mode;return w.__editorStorage.receipt.length;},mode);
-        const value=await invoke(s,'presetEditorSave',{account:ACCOUNT,name:presetName});
-        check(`${s.name}: real receipt ${mode} failure rejects named save before HTTP`,!value.ok&&value.error.code==='PRESET_RECEIPT_UNAVAILABLE'&&s.presetWrites.length===0);
+        await invoke(s,'presetEditorState'); const postsBefore=s.presetWrites.length, value=await invoke(s,'presetEditorSave',{account:ACCOUNT,name:presetName});
+        check(`${s.name}: real receipt ${mode} failure still saves with one POST`,value.ok&&s.presetWrites.length===postsBefore+1);
         const paths=await native(s,(w,index)=>w.__editorStorage.receipt.slice(index),beforePaths);
         check(`${s.name}: ${mode} denial reaches its intended storage path`,paths.includes(mode==='length'?'length':mode==='list-get'?'getItem':'setItem'),paths);
     }
@@ -440,12 +440,12 @@ async function scopedStorageCase(s) {
     // mode, so the test still reaches a real setItem denial. Recovery separately
     // rejects getItem; this does not weaken either production error assertion.
     await native(s,w=>{w.__editorStorage.receiptMode='get';});
-    const recovery=await invoke(s,'presetEditorRecover',{account:ACCOUNT,name:presetName,operationId:'synthetic-not-submitted'});
-    check(`${s.name}: receipt get failure rejects recovery without HTTP save`,!recovery.ok&&recovery.error.code==='PRESET_RECEIPT_UNAVAILABLE'&&s.presetWrites.length===0);
+    const postsBeforeRecovery=s.presetWrites.length, recovery=await invoke(s,'presetEditorRecover',{account:ACCOUNT,name:presetName,operationId:'synthetic-not-submitted'});
+    check(`${s.name}: receipt get failure rejects recovery without HTTP save`,!recovery.ok&&recovery.error.code==='PRESET_RECEIPT_UNAVAILABLE'&&s.presetWrites.length===postsBeforeRecovery);
     await native(s,w=>{w.__editorStorage.receiptMode='length';});
     await navigate(s,'#preset');
     await s.page.getByRole('button',{name:'保存到此预设',exact:true}).waitFor();
-    check(`${s.name}: actual preset UI exposes receipt error and disables named action`,await s.page.getByRole('button',{name:'保存到此预设',exact:true}).isDisabled()&&await s.page.locator('.tl-preset-page .tl-error').count()>0);
+    check(`${s.name}: actual preset UI keeps the named save available`,await s.page.getByRole('button',{name:'保存到此预设',exact:true}).isEnabled());
     await navigate(s,'#'+new URLSearchParams({world:book,entry:'0'}));
     await s.page.locator('#tl-wi-content').fill(`UNSAVED_${run}`);
     check(`${s.name}: actual world UI is read only for persistence while text remains visible`,await s.page.locator('.tl-entry-editor').getByRole('button',{name:'保存',exact:true}).isDisabled()&&await s.page.locator('.tl-entry-editor .tl-error').count()>0);

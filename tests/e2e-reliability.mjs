@@ -175,13 +175,8 @@ try {
     await page.getByRole('dialog', { name: '改动已经生效' }).waitFor();
     check('离开未保存预设会确认', true);
     await page.getByRole('dialog', { name: '改动已经生效' }).getByRole('button', { name: '关闭' }).click();
-    // A failed save counts as unknown: saving under the same name again waits until that save has been checked.
-    check('保存失败后同名保存先要查验', await saveButton.isDisabled() && (await page.locator('.tl-preset-savebar').innerText()).includes('还不知道存没存上'));
-    // Checking only reads the server; saving under the same name again means accepting that the old request may land.
-    await page.getByRole('button', { name: '检查这次保存', exact: true }).click();
-    await page.getByRole('button', { name: '继续存这个名字有什么风险', exact: true }).click();
-    await page.getByRole('dialog', { name: '继续存这个名字的风险' }).getByRole('button', { name: /^知道了，继续存这个名字/ }).click();
-    await page.waitForFunction(() => { const b = [...document.querySelectorAll('.tl-preset-savebar button')].find(x => x.textContent === '保存到此预设'); return b && !b.disabled; }, null, { timeout: 30000 });
+    // A failed save does not hold the next one back: the button stays usable and saving again overwrites.
+    check('保存失败后按钮仍可点并如实提示', await saveButton.isEnabled() && (await page.locator('.tl-preset-savebar').innerText()).includes('可能没存上'));
     await saveButton.click();
     await page.waitForFunction(() => document.querySelector('.tl-preset-savebar')?.textContent.includes('都已存进预设'), null, { timeout: 30000 }).catch(() => {});
     check('再次手动保存成功', await serverTemp() === 0.72);
