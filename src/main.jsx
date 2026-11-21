@@ -17,7 +17,7 @@ import { MePage } from './me.jsx';
 import { ModelSheet } from './model.jsx';
 import { giveLetterPicture } from './persona.jsx';
 import { Reader } from './reader.jsx';
-import { ReturnHandle } from './return-handle.jsx';
+import { NativeHandle, ReturnHandle } from './return-handle.jsx';
 import { refreshBootLook, setAppearanceAccount, syncAppearanceWithAccount } from './theme.js';
 import { ThemeEditor } from './theme-editor.jsx';
 import { CharacterEditor } from './editor.jsx';
@@ -185,6 +185,12 @@ function App() {
         setNativeVisible(visible);
         if (visible) setPopupWaiting(false);
         if (!visible) followNativeChat();
+    }, []);
+    // The edge tab in the shell: straight into the full app, or once it has finished loading.
+    const openNative = useCallback(() => {
+        if (engine.getBridge()) { showNative(true); return; }
+        notify('原版界面还在准备，好了自动打开', 'info');
+        engine.whenBridge().then(() => showNative(true), e => notify(e.message));
     }, []);
     // TT: the shell comes back from the menu after the reader used TT's own page, perhaps for another story.
     useEffect(() => engine.onEngine(type => { if (type === 'tt-shown') followNativeChat(); }), []);
@@ -425,6 +431,7 @@ function App() {
                 </div>
             )}
             {nativeVisible && <ReturnHandle onReturn={() => { autoShown.current = false; showNative(false); }} />}
+            {user && !nativeVisible && route.name !== 'setup' && <NativeHandle onOpen={openNative} />}
             {user && sheet === 'personal' && <PersonalSheet user={user} notify={notify} onClose={() => setSheet(null)} onLocate={async source => {
                 if (source.groupId) {
                     await withBridge('回到摘录出处', b => b.revealPersonalSource(source));

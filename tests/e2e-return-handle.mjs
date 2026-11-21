@@ -1,5 +1,6 @@
 // The way back from the full app on a phone: a faded tab on the screen's edge that a tap takes back and a drag moves
 // (to the other edge too), remembered on this device; a drag never counts as a tap and never scrolls the full app.
+// In tavern-lite the same spot holds a fainter tab into the full app, under any open sheet.
 // Usage: node e2e-return-handle.mjs <baseUrl> <handle> <password>   (SHOTS=<folder> keeps screenshots)
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
@@ -135,5 +136,43 @@ await tab.focus();
 await page.keyboard.press('Enter');
 await page.waitForTimeout(800);
 check('Enter on the focused tab goes back', !(await nativeShown()), 'still in the full app');
+
+// In tavern-lite the same spot holds the way into the full app: faint, under the sheets, and a tap opens the full app.
+const forward = () => page.evaluate(() => {
+    const b = document.querySelector('.tl-to-native');
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    const beside = document.elementFromPoint(r.x - 8, r.y + r.height / 2);
+    return {
+        x: r.x, y: r.y, w: r.width, h: r.height, right: innerWidth - r.right, cls: b.className, opacity: Number(getComputedStyle(b).opacity),
+        onTop: !!hit && b.contains(hit), takesBeside: !!beside && b.contains(beside),
+    };
+});
+await page.waitForTimeout(400);
+const way = await forward();
+await shot('5-in-tavern-lite');
+check('in tavern-lite a tab to the full app sits where the way back was', !!way && /is-right/.test(way.cls) && way.right <= 1 && Math.abs(way.y - right.y) <= 2 && way.w <= 28, JSON.stringify({ way, right }));
+check('it is faint beside the story', !!way && way.opacity < 0.45 && way.onTop, JSON.stringify(way));
+check('it takes no touches beside itself (each reply’s ⋯ scrolls past there)', !!way && !way.takesBeside, JSON.stringify(way));
+await page.getByRole('button', { name: '更多', exact: true }).click();
+await page.waitForTimeout(500);
+const underSheet = await forward();
+check('an open sheet covers it', !!underSheet && !underSheet.onTop, JSON.stringify(underSheet));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(500);
+await page.getByRole('button', { name: '去原版界面', exact: true }).tap();
+await tab.waitFor({ timeout: 30000 });
+check('a tap on it opens the full app', await nativeShown(), 'full app not shown');
+check('the way in is gone while the full app shows', (await forward()) === null, 'still there');
+await tab.tap();
+await page.waitForTimeout(800);
+check('and back again', !(await nativeShown()) && !!(await forward()), 'not back');
+// Dragged low, it stays above tavern-lite's send area (taller than the full app's send row).
+const wayNow = await forward();
+await touchDrag({ x: wayNow.x + wayNow.w / 2, y: wayNow.y + wayNow.h / 2 }, { x: wayNow.x + wayNow.w / 2, y: 840 });
+await page.waitForTimeout(400);
+const low = await forward();
+check('dragged low, it stays above the send area', !!low && low.y + low.h <= 844 - 200 + 1 && !(await nativeShown()), JSON.stringify(low));
 
 await finish(problems.length ? 1 : 0);
