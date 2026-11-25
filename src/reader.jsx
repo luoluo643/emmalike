@@ -13,6 +13,7 @@ import { hiddenInputButtons, setInputButtonHidden } from './input-buttons.js';
 import { storyKey, readStory, writeStory, messageMark } from './story-state.js';
 import { readLooks, keepLooks } from './look-memory.js';
 import { useReadingPosition } from './reading-position.js';
+import { homeStyle } from './theme.js';
 import { CaptureSheet, PersonalNotice, PersonalSheet } from './personal.jsx';
 import { makeSource, mutation, saveRecord, locateSource, requestSourceJump, takeSourceJump } from './personal-records.js';
 import { EpisodesSheet, episodeIdentity } from './episodes.jsx';
@@ -346,6 +347,13 @@ function Message({ message, character, user, display, isLast, synced, generating
             )}
         </article>
     );
+}
+
+/** Back to the shelf; the 故障终端 theme first covers the page with its block transition (glitch-fx.js). */
+function leaveToShelf(goBack) {
+    const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (homeStyle() !== 'glitch' || still) { goBack(); return; }
+    import('./glitch-fx.js').then(m => m.leaveGlitch(goBack)).catch(goBack);
 }
 
 export function Reader({ route, user, eng, notify, withBridge, onNative, onTools, onModel, onReading, onEditInNative, onShowInNative, onOpenPanel, onPendingChange }) {
@@ -948,10 +956,25 @@ export function Reader({ route, user, eng, notify, withBridge, onNative, onTools
     const personaName = persona?.list.find(p => p.id === persona.current)?.name ?? user.name;
     const shown = folded ? messages.filter(m => m.index === floor.host) : messages;
 
+    // The 故障终端 theme dresses the story page too (glitch-reader.js): loaded only with it, taken off with it.
+    const [home, setHome] = useState(homeStyle);
+    useEffect(() => {
+        const update = () => setHome(homeStyle());
+        addEventListener('tl-home-changed', update);
+        return () => removeEventListener('tl-home-changed', update);
+    }, []);
+    const characterName = character?.name;
+    useEffect(() => {
+        if (home !== 'glitch' || !characterName || !list.current) return;
+        let off = null, alive = true;
+        import('./glitch-reader.js').then(m => { if (alive && list.current) off = m.attach(list.current, characterName); }).catch(() => { });
+        return () => { alive = false; off?.(); };
+    }, [home, characterName, route.file]);
+
     return (
         <main class="tl-chat">
             <header class="tl-header tl-reader-header" data-hidden={headerHidden ? 'true' : undefined}>
-                <button class="tl-ghost tl-back" onClick={() => go({ name: 'library' })} aria-label="返回书架"><Icon name="back" /></button>
+                <button class="tl-ghost tl-back" onClick={() => leaveToShelf(() => go({ name: 'library' }))} aria-label="返回书架"><Icon name="back" /></button>
                 <button class="tl-reader-title" aria-label="切换故事" disabled={!character} onClick={() => setSheet({ type: 'chapters' })}>
                     <strong class="tl-chat-title">{character?.name ?? '…'}</strong>
                     <span class="tl-chapter">{lineLabel}<Icon name="chevronDown" size={14} /></span>

@@ -1,0 +1,135 @@
+/* Dynamic animations and decorations for the story page and bottom sheets under the 故障终端 theme. */
+@layer tl-base {
+    .tl-gt-px { position: fixed; inset: 0; z-index: 1000; width: 100%; height: 100%; pointer-events: none; }
+    .tl-gt-px[hidden] { display: none; }
+    /* Chapter opening animations */
+    :root[data-tl-home="glitch"] .tl-chapter-heading span { position: relative; display: inline-block; }
+    :root[data-tl-home="glitch"] .tl-chapter-heading span::before {
+        content: attr(data-c); position: absolute; left: 0; top: 0; color: transparent;
+        text-shadow: -5px 0 1px rgba(56,228,255,.88), 5px 0 1px rgba(226,60,216,.88), 0 0 5px rgba(60,55,95,.8);
+        opacity: 0;
+    }
+    :root[data-tl-home="glitch"] .tl-chapter-opening.gt-go .tl-chapter-heading span::before {
+        animation: tl-gt-ghost 115ms steps(4, end) var(--t) both;
+    }
+    :root[data-tl-home="glitch"] .tl-chapter-opening.gt-go .tl-chapter-heading span {
+        animation: tl-gt-crisp 75ms steps(3, end) calc(var(--t) + 32ms) both;
+    }
+    :root[data-tl-home="glitch"] .tl-chapter-opening.gt-whole.gt-go .tl-chapter-heading {
+        animation: tl-gt-dscin 140ms steps(4, end) both;
+    }
+    :root[data-tl-home="glitch"] .tl-gt-kpf { display: inline-block; line-height: 0; margin-right: 6px; vertical-align: 1px; color: #3a2fd2; }
+    :root[data-tl-home="glitch"] .tl-gt-xs { position: absolute; width: 14px; height: 14px; opacity: 0; pointer-events: none; }
+    :root[data-tl-home="glitch"] .tl-gt-xs::before,
+    :root[data-tl-home="glitch"] .tl-gt-xs::after {
+        content: ""; position: absolute; left: 6px; top: 0; width: 2px; height: 14px; background: #e23cd8; transform: rotate(45deg);
+    }
+    :root[data-tl-home="glitch"] .tl-gt-xs::after { transform: rotate(-45deg); }
+    :root[data-tl-home="glitch"] .tl-chapter-opening.gt-go .tl-gt-xs {
+        animation: tl-gt-xs 140ms linear var(--t) both;
+    }
+
+    /* New message glitch bars & jitter */
+    .tl-gt-msg-gb { position: absolute; left: -6px; right: -6px; height: 0; pointer-events: none; z-index: 2; }
+    .tl-gt-msg-gb i {
+        position: absolute; height: var(--h); left: var(--x); width: var(--w); top: var(--y);
+        background: #1d1356; opacity: 0;
+        box-shadow: -12px 0 0 -3px rgba(56,228,255,.85), 10px 2px 0 -4px rgba(226,60,216,.9);
+    }
+    :root[data-tl-home="glitch"] .tl-message.gt-is-new .tl-gt-msg-gb i {
+        animation: tl-gt-mbar 170ms steps(1, end) var(--t) both;
+    }
+    :root[data-tl-home="glitch"] .tl-message.gt-is-new .tl-message-body {
+        animation: tl-gt-mjit 200ms steps(1, end) 30ms both;
+    }
+    :root[data-tl-home="glitch"] .tl-message.gt-is-new .tl-message-name > span:first-child {
+        animation: tl-gt-dscin 120ms steps(4, end) both;
+    }
+
+    /* Bottom sheet entrance bars, danger ribbon and exit ghost squash */
+    .tl-gt-sb { position: absolute; left: -10px; right: -10px; top: 0; height: 0; z-index: 5; pointer-events: none; }
+    .tl-gt-sb i {
+        position: absolute; height: var(--h); left: var(--x); width: var(--w); top: var(--y);
+        background: #1d1356; opacity: 0;
+        box-shadow: -14px 0 0 -3px rgba(56,228,255,.85), 12px 2px 0 -4px rgba(226,60,216,.9);
+    }
+    :root[data-tl-home="glitch"] .tl-sheet[data-gt-sheet] .tl-gt-sb i {
+        animation: tl-gt-mbar 190ms steps(1, end) var(--t) both;
+    }
+    :root[data-tl-home="glitch"] .tl-sheet[data-gt-tone="danger"] .tl-sheet-header {
+        background: linear-gradient(#4c071d, #860c32);
+    }
+    .tl-gt-rib { position: relative; height: 26px; width: 186px; margin: 4px 0 12px; transform-origin: 12% 50%; }
+    .tl-gt-rib .rb { position: absolute; left: 0; top: 0; width: 172px; height: 26px; }
+    .tl-gt-rib .em { position: absolute; left: -2px; top: -4px; width: 57px; height: 32px; }
+    .tl-gt-rib .tx {
+        position: absolute; left: 58px; right: 14px; top: 0; line-height: 26px;
+        font-size: 13.5px; font-weight: 800; color: #fff0f5;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .tl-gt-sheet-ghost {
+        transform-origin: 50% 50%;
+        animation: tl-gt-sheetout 200ms linear both !important;
+    }
+    .tl-gt-sheet-ghost * { animation: none !important; }
+
+    @keyframes tl-gt-ghost {
+        0% { opacity: 0; transform: translateX(12px) scaleX(1.55); }
+        25% { opacity: 1; transform: translateX(-6px) scaleX(1.3); }
+        55% { opacity: .9; transform: translateX(4px) scaleX(1.12); }
+        80% { opacity: .55; transform: translateX(-2px); }
+        100% { opacity: 0; transform: none; }
+    }
+    @keyframes tl-gt-crisp {
+        0% { color: transparent; transform: translateX(6px) scaleX(1.22); }
+        50% { color: inherit; transform: translateX(-2px) scaleX(1.04); }
+        100% { transform: none; }
+    }
+    @keyframes tl-gt-dscin {
+        0% { opacity: 0; transform: translateX(14px) scaleX(1.3); }
+        45% { opacity: 1; transform: translateX(-4px) scaleX(1.06); }
+        100% { opacity: 1; transform: none; }
+    }
+    @keyframes tl-gt-xs {
+        0% { opacity: 0; transform: scale(.2); }
+        35% { opacity: 1; transform: scale(1.1) rotate(20deg); }
+        100% { opacity: 0; transform: scale(.4) rotate(45deg); }
+    }
+    @keyframes tl-gt-mbar {
+        0% { opacity: 0; transform: translateX(0) scaleX(.5); }
+        12% { opacity: 1; transform: translateX(calc(var(--j)*1.3)) scaleX(1.15); }
+        40% { transform: translateX(calc(var(--j)*-1.1)) scaleX(1.25); }
+        70% { opacity: .6; transform: translateX(calc(var(--j)*.5)); }
+        100% { opacity: 0; transform: none; }
+    }
+    @keyframes tl-gt-mjit {
+        0% { opacity: .2; transform: translateX(8px); text-shadow: -3px 0 rgba(56,228,255,.8), 3px 0 rgba(226,60,216,.8); }
+        25% { opacity: .85; transform: translateX(-5px); }
+        50% { opacity: 1; transform: translateX(3px); text-shadow: -1.5px 0 rgba(56,228,255,.6); }
+        75% { transform: translateX(-1px); }
+        100% { opacity: 1; transform: none; text-shadow: none; }
+    }
+    @keyframes tl-gt-sheetout {
+        0% { transform: none; opacity: 1; }
+        12% { transform: translateX(8px) scaleY(.9); }
+        24% { transform: translateX(-10px) scaleY(.72); opacity: .85; }
+        38% { transform: translateX(-4px) scaleY(.48); opacity: .7; }
+        52% { transform: translateX(5px) scaleY(.2); opacity: .5; }
+        66% { transform: scaleY(.06) scaleX(.9); opacity: .4; }
+        100% { transform: scaleY(.02) scaleX(.5) translateX(-30px); opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .tl-gt-sheet-ghost, :root[data-tl-home="glitch"] .tl-message.gt-is-new * { animation: none !important; }
+    }
+}
+/* Theme overrides sit outside tl-base, so reduced motion must do the same. */
+@media (prefers-reduced-motion: reduce) {
+    :root[data-tl-home="glitch"] *,
+    :root[data-tl-home="glitch"] *::before,
+    :root[data-tl-home="glitch"] *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+    }
+}
+:root[data-tl-home="glitch"] .tl-gt [role="button"]:focus-visible { outline: 3px solid #38e4ff; outline-offset: 3px; }

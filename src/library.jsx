@@ -4,6 +4,7 @@ import * as engine from './engine.js';
 import { substituteNames } from './render.js';
 import { storyIdentityLabel } from './episodes.jsx';
 import { ChapterActions, useChapters } from './chapters.jsx';
+import { homeStyle } from './theme.js';
 import { Avatar, ConfirmSheet, GroupCover, Sheet, SheetItem, chapterLabel, chapterNumbers, go, plainSnippet, relativeTime, useEngine, useLongPress, friendlyError } from './ui.jsx';
 
 const FAVORITES = '★ 收藏';
@@ -80,6 +81,35 @@ function BookCard({ character, onMenu }) {
     );
 }
 
+/** The shelf's front the theme asks for, following the theme as it changes. */
+function useHomeStyle() {
+    const [home, setHome] = useState(homeStyle);
+    useEffect(() => {
+        const update = () => setHome(homeStyle());
+        update();
+        addEventListener('tl-home-changed', update);
+        return () => removeEventListener('tl-home-changed', update);
+    }, []);
+    return home;
+}
+
+let GlitchHomeView = null;
+function GlitchFront(props) {
+    const [View, setView] = useState(() => GlitchHomeView);
+    const [failed, setFailed] = useState(false);
+    const [attempt, setAttempt] = useState(0);
+    useEffect(() => {
+        if (View) return;
+        let alive = true;
+        setFailed(false);
+        import('./glitch-home.jsx').then(m => { GlitchHomeView = m.GlitchHome; if (alive) setView(() => m.GlitchHome); }).catch(() => { if (alive) setFailed(true); });
+        return () => { alive = false; };
+    }, [attempt]);
+    return View ? <View {...props} /> : failed
+        ? <div role="status">主题封面未能加载，仍可从下方角色卡进入。<button class="tl-button" onClick={() => setAttempt(n => n + 1)}>重试</button></div>
+        : <div class="tl-skeleton tl-gt-wait" role="status" aria-label="正在加载" />;
+}
+
 // The shelf as last read, so coming back from a story draws it at once while it is read anew. Memory only, per account.
 let lastShelf = null;
 
@@ -110,6 +140,7 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
     const [storyMenu, setStoryMenu] = useState(null);
     const fileInput = useRef(null);
     const eng = useEngine();
+    const glitch = useHomeStyle() === 'glitch';
     const unconfigured = eng.state === 'ready' && engine.getBridge()?.connectionConfigured?.() === false;
 
     const load = () => Promise.all([api.getCharacters(), api.getRecentChats(20), api.getGroups()])
@@ -205,14 +236,14 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
     // One card per character or group: its most recent chapter.
     const seen = new Set();
     const continueList = needle || tag ? [] : recent
-        .filter(r => (r.avatar && byAvatar.has(r.avatar)) || (r.group && byGroup.has(String(r.group))))
+        .filter(r => (r.avatar && byAvatar.has(r.avatar)) || (!glitch && r.group && byGroup.has(String(r.group))))
         .filter(r => {
             const key = r.avatar ? `c:${r.avatar}` : `g:${r.group}`;
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
         })
-        .slice(0, 4);
+        .slice(0, glitch ? 6 : 4);
     const storyNumbers = useStoryNumbers(continueList.filter(r => r.avatar).map(r => byAvatar.get(r.avatar)));
     const empty = characters !== null && characters.length === 0 && groups.length === 0;
 
@@ -248,7 +279,19 @@ export function Library({ user, notify, withBridge, onOpenGroup, onEditCharacter
                     </div>
                 </section>
             )}
-            {continueList.length > 0 && (
+            {glitch && !needle && !tag && characters !== null && !empty && (
+                <GlitchFront onMenu={setStoryMenu} items={continueList.map(r => {
+                    const character = byAvatar.get(r.avatar);
+                    return {
+                        key: r.avatar, entry: r, name: character.name, tag: (character.tags ?? [])[0] ?? '',
+                        story: storyIdentityLabel(r, character.name, storyNumbers.get(r.avatar), user.handle),
+                        snippet: plainSnippet(substituteNames(r.mes, character.name, user.name)).slice(0, 140),
+                        count: r.chat_items || 0, when: relativeTime(r.last_mes),
+                        open: () => go({ name: 'chat', avatar: character.avatar, file: api.chatId(r.file_name) }),
+                    };
+                })} />
+            )}
+            {!glitch && continueList.length > 0 && (
                 <section class="tl-section">
                     <div class="tl-continue-list">
                         {continueList.map((r, i) => (

@@ -92,6 +92,25 @@
         height: 100%;
     }
 
+    /* iPhone (iOS 26 and later) blurs whatever sits under the status bar unless the page has a fixed, full-width,
+       coloured bar at the very top: then it paints that bar's colour there instead. No page header here is fixed,
+       so this strip is that bar, as tall as the status bar (zero where there is none). Themes whose header is not
+       the page colour set --tl-statusbar. */
+    .tl-statusbar { display: none; }
+    @supports (-webkit-touch-callout: none) {
+        .tl-statusbar {
+            display: block;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 900;
+            height: env(safe-area-inset-top, 0px);
+            background: var(--tl-statusbar, var(--tl-bg));
+            pointer-events: none;
+        }
+    }
+
     /* iPhone home-screen app: the page is sized from the screen (ios-standalone.js); WebKit's own height falls short. */
     html[data-ios-standalone] {
         height: var(--tl-app-height, 100%);
@@ -235,6 +254,7 @@
     }
 
     .tl-skeleton-shelf { display: grid; gap: 18px; }
+    .tl-gt-wait { width: 100%; height: 300px; border-radius: 12px; }
     .tl-loading > .tl-muted { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
     .tl-loading-story { padding-top: 2.4em; }
     .tl-loading-story .tl-skeleton-line { height: calc(var(--tl-font-size) * 0.9); margin: calc(var(--tl-font-size) * 0.9) 0; }
