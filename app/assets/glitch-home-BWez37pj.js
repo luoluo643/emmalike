@@ -1,4 +1,4 @@
-import{A as z,y as Bt,_ as Tt,H as qt,u as a}from"./index-BqIT4snq.js";import{watchGlitchSheets as Gt,pfSvg as Z,pad as H,reduced as q,takeGlitchReturn as Rt,blocks as X}from"./glitch-fx-Gc-9-pPw.js";const Pt=`<div class="gp" id="gp" hidden>
+import{A as z,y as Bt,_ as Tt,H as qt,u as a}from"./index-1PAzixUX.js";import{watchGlitchSheets as Gt,pfSvg as Z,pad as H,reduced as q,takeGlitchReturn as Rt,blocks as X}from"./glitch-fx-Gc-9-pPw.js";const Pt=`<div class="gp" id="gp" hidden>
     <div class="hit" id="hit" role="button" aria-label="打开"></div>
     <div class="a cbar"></div>
     <div class="squash">
@@ -57,7 +57,7 @@ import{A as z,y as Bt,_ as Tt,H as qt,u as a}from"./index-BqIT4snq.js";import{wa
           <div class="a dsc" id="dsc"><span id="dscTx"></span></div>
         </div>
 
-        <img class="a" src="../skins/gt-cube.webp" alt="" style="left:-44.5px;top:13.6px;width:76px;height:54px;z-index:3">
+        <img class="a" src="../skins/gt-cube2.webp" alt="" style="left:-44.5px;top:13.6px;width:76px;height:54px;z-index:3">
 
         <div class="a ch" style="z-index:2">
           <img class="g1 ga" src="../skins/gt-gh-a0.webp" alt="" style="left:-8.1px;top:-8.1px;width:141.2px;height:201.2px"><img class="g2 ga" src="../skins/gt-gh-a1.webp" alt="" style="left:-6.2px;top:-6.2px;width:137.5px;height:197.5px"><img class="g1 gb" src="../skins/gt-gh-b0.webp" alt="" style="left:-8.1px;top:-8.1px;width:152.5px;height:201.2px"><img class="g2 gb" src="../skins/gt-gh-b1.webp" alt="" style="left:-6.2px;top:-6.2px;width:148.8px;height:197.5px">

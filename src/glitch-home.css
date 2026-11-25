@@ -59,6 +59,8 @@
 .tl-gt .ttl{left:28px;top:-17px;font-weight:900;font-size:30px;line-height:32px;color:#26262a;white-space:nowrap;letter-spacing:.02em;text-shadow:1.5px 1.5px 0 #8a86c4,2.5px 2.5px 0 rgba(42,32,120,.35)}
 .tl-gt .sub{left:30px;top:18px;font-weight:900;font-size:17px;line-height:18px;color:#2f2cd8;white-space:nowrap;text-shadow:1px 1px 0 #a4a2e6}
 .tl-gt .ttl span,.tl-gt .sub span{position:relative;display:inline-block}
+/* 标题和介绍压在冰块与碎冰上面（冰块 z-index 3） */
+.tl-gt .k-end .ttl,.tl-gt .k-end .sub{z-index:4}
 .tl-gt .ttl span::before,.tl-gt .sub span::before{content:attr(data-c);position:absolute;left:0;top:0;color:transparent;text-shadow:-5px 0 1px rgba(56,228,255,.88),5px 0 1px rgba(226,60,216,.88),0 0 5px rgba(60,55,95,.8)}
 /* 内容：回合 */
 .tl-gt .rib{left:-4px;top:-61px;width:174px;height:23px;background:linear-gradient(90deg,#4a0a20 0,#640c2a 70%,#7c1030 100%);clip-path:none;color:#f3dfe6;font-weight:700;font-size:13px;line-height:23px;padding-left:66px;border-right:4px solid #ff3e74}
